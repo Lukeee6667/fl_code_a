@@ -96,6 +96,8 @@ class Aggregation():
             aggregated_updates = self.agg_rfa(agent_updates_dict)
         elif self.args.aggr == "fedup":
             aggregated_updates = self.agg_fedup(agent_updates_dict, cur_global_params, global_model, current_round)
+        elif self.args.aggr == "alignins_fedup_hybrid":
+            aggregated_updates = self.agg_alignins_fedup_hybrid(agent_updates_dict, cur_global_params, global_model, current_round)
         neurotoxin_mask = {}
         updates_dict = vector_to_name_param(aggregated_updates, copy.deepcopy(global_model.state_dict()))
         for name in updates_dict:
@@ -131,17 +133,18 @@ class Aggregation():
     def agg_fedup(self, agent_updates_dict, flat_global_model, global_model, current_round=None):
         """
         FedUP: Efficient Pruning-based Federated Unlearning for Model Poisoning Attacks
-        基于剪枝的联邦遗忘聚合方法
+        基于剪枝的联邦遗忘聚合方法，实现论文Algorithm 1
         """
         import torch.nn.functional as F
         from torch.nn.utils import parameters_to_vector, vector_to_parameters
         
-        # FedUP参数设置
-        pruning_ratio = getattr(self.args, 'fedup_pruning_ratio', 0.1)  # 剪枝比例
-        sensitivity_threshold = getattr(self.args, 'fedup_sensitivity_threshold', 0.5)  # 敏感度阈值
-        unlearn_threshold = getattr(self.args, 'fedup_unlearn_threshold', 0.8)  # 遗忘阈值
+        # FedUP参数设置（基于论文）
+        p_max = getattr(self.args, 'fedup_p_max', 0.15)  # 最大剪枝率
+        p_min = getattr(self.args, 'fedup_p_min', 0.01)  # 最小剪枝率
+        gamma = getattr(self.args, 'fedup_gamma', 5)     # 曲线陡度参数
+        sensitivity_threshold = getattr(self.args, 'fedup_sensitivity_threshold', 0.5)  # 异常检测阈值
         
-        logging.info(f"FedUP聚合 - 剪枝比例: {pruning_ratio}, 敏感度阈值: {sensitivity_threshold}")
+        logging.info(f"FedUP聚合 - P_max: {p_max}, P_min: {p_min}, Gamma: {gamma}")
         
         # 1. 计算客户端更新的统计信息
         update_magnitudes = {}
@@ -192,14 +195,21 @@ class Aggregation():
                 suspicious_clients.add(client_id)
                 logging.info(f"客户端 {client_id} 被标记为异常 (方向异常: similarity={similarity:.3f})")
         
-        # 4. 生成遗忘掩码
-        unlearn_mask = self._generate_unlearn_mask(
-            agent_updates_dict, suspicious_clients, global_model, pruning_ratio
+        # 4. 计算自适应剪枝比例（基于论文公式5）
+        benign_clients = [cid for cid in agent_updates_dict.keys() if cid not in suspicious_clients]
+        adaptive_pruning_ratio = self._calculate_adaptive_pruning_ratio(
+            agent_updates_dict, benign_clients, p_max, p_min, gamma
         )
         
-        # 5. 应用遗忘掩码进行聚合
+        # 5. 生成遗忘掩码（基于排名机制）
+        unlearn_mask = self._generate_unlearn_mask_ranking(
+            agent_updates_dict, suspicious_clients, global_model, adaptive_pruning_ratio
+        )
+        
+        # 6. 应用遗忘掩码进行聚合
         if len(suspicious_clients) > 0:
             logging.info(f"应用FedUP遗忘，影响客户端: {suspicious_clients}")
+            logging.info(f"自适应剪枝比例: {adaptive_pruning_ratio:.4f}")
             # 过滤掉可疑客户端或降低其权重
             filtered_updates = {}
             total_weight = 0
@@ -231,9 +241,39 @@ class Aggregation():
         
         return aggregated_updates
     
-    def _generate_unlearn_mask(self, agent_updates_dict, suspicious_clients, global_model, pruning_ratio):
+    def _calculate_adaptive_pruning_ratio(self, agent_updates_dict, benign_clients, p_max, p_min, gamma):
         """
-        生成用于遗忘的剪枝掩码
+        根据论文公式5计算自适应剪枝比例
+        P ≈ (P_max - P_min) * z^γ + P_min
+        """
+        if len(benign_clients) < 2:
+            return p_min
+        
+        # 计算良性客户端更新间的余弦相似度
+        similarities = []
+        benign_updates = [agent_updates_dict[cid] for cid in benign_clients]
+        
+        for i in range(len(benign_updates)):
+            for j in range(i + 1, len(benign_updates)):
+                cos_sim = torch.nn.functional.cosine_similarity(
+                    benign_updates[i].unsqueeze(0), benign_updates[j].unsqueeze(0)
+                ).item()
+                similarities.append(cos_sim)
+        
+        # 计算平均相似度
+        avg_similarity = sum(similarities) / len(similarities)
+        
+        # 归一化到[0,1]区间（假设收敛时相似度在[0.5,1]之间）
+        z = max(0, min(1, (avg_similarity - 0.5) / 0.5))
+        
+        # 应用论文公式5
+        adaptive_ratio = (p_max - p_min) * (z ** gamma) + p_min
+        
+        return adaptive_ratio
+    
+    def _generate_unlearn_mask_ranking(self, agent_updates_dict, suspicious_clients, global_model, pruning_ratio):
+        """
+        基于排名机制生成遗忘掩码（论文Algorithm 1）
         """
         if len(suspicious_clients) == 0:
             # 如果没有可疑客户端，返回全1掩码
@@ -241,28 +281,50 @@ class Aggregation():
                 [global_model.state_dict()[name] for name in global_model.state_dict()]
             ))
         
+        # 计算良性客户端更新的平均值
+        benign_clients = [cid for cid in agent_updates_dict.keys() if cid not in suspicious_clients]
+        if len(benign_clients) == 0:
+            return torch.ones_like(parameters_to_vector(
+                [global_model.state_dict()[name] for name in global_model.state_dict()]
+            ))
+        
+        benign_updates = [agent_updates_dict[cid] for cid in benign_clients]
+        avg_benign_update = torch.stack(benign_updates).mean(dim=0)
+        
         # 计算可疑客户端更新的平均值
         suspicious_updates = [agent_updates_dict[cid] for cid in suspicious_clients]
         avg_suspicious_update = torch.stack(suspicious_updates).mean(dim=0)
         
-        # 基于更新幅度生成掩码
-        update_importance = torch.abs(avg_suspicious_update)
+        # 获取全局模型参数向量
+        global_params = parameters_to_vector(
+            [global_model.state_dict()[name] for name in global_model.state_dict()]
+        )
         
-        # 选择要剪枝的参数（重要性最高的部分）
-        num_params = len(update_importance)
+        # 根据Algorithm 1计算rank（差异的平方乘以全局权重值）
+        diff_squared = (avg_suspicious_update - avg_benign_update) ** 2
+        rank = diff_squared * torch.abs(global_params)
+        
+        # 基于排名选择前pruning_ratio%的权重进行剪枝
+        num_params = len(rank)
         num_prune = int(num_params * pruning_ratio)
         
         if num_prune > 0:
-            # 获取最重要参数的索引
-            _, top_indices = torch.topk(update_importance, num_prune)
+            # 获取排名最高的参数索引
+            _, top_indices = torch.topk(rank, num_prune)
             
-            # 创建掩码（对重要参数进行剪枝）
-            mask = torch.ones_like(update_importance)
+            # 创建掩码（对排名高的参数进行剪枝）
+            mask = torch.ones_like(rank)
             mask[top_indices] = 0.0  # 剪枝掉这些参数
         else:
-            mask = torch.ones_like(update_importance)
+            mask = torch.ones_like(rank)
         
         return mask
+    
+    def _generate_unlearn_mask(self, agent_updates_dict, suspicious_clients, global_model, pruning_ratio):
+        """
+        生成用于遗忘的剪枝掩码（保留原方法以兼容性）
+        """
+        return self._generate_unlearn_mask_ranking(agent_updates_dict, suspicious_clients, global_model, pruning_ratio)
 
     def agg_alignins(self, agent_updates_dict, flat_global_model):
         local_updates = []
@@ -2440,6 +2502,175 @@ class Aggregation():
         for idx in benign_idx:
             current_dict[chosen_clients[idx]] = benign_updates[idx]
 
+        aggregated_update = self.agg_avg(current_dict)
+        return aggregated_update
+
+    def agg_alignins_fedup_hybrid(self, agent_updates_dict, flat_global_model, global_model, current_round=None):
+        """
+        混合方法：结合AlignIns的多指标异常检测和FedUP的自适应剪枝策略
+        
+        步骤：
+        1. 使用AlignIns的多指标检测（TDA、MPSA、梯度范数、余弦相似度）识别异常客户端
+        2. 对检测到的异常客户端，应用FedUP的自适应剪枝策略
+        3. 结合剪枝后的更新进行聚合
+        """
+        local_updates = []
+        benign_id = []
+        malicious_id = []
+
+        for _id, update in agent_updates_dict.items():
+            local_updates.append(update)
+            if _id < self.args.num_corrupt:
+                malicious_id.append(_id)
+            else:
+                benign_id.append(_id)
+
+        chosen_clients = malicious_id + benign_id
+        num_chosen_clients = len(malicious_id + benign_id)
+        inter_model_updates = torch.stack(local_updates, dim=0)
+
+        # ========== 第一阶段：AlignIns多指标异常检测 ==========
+        tda_list = []
+        mpsa_list = []
+        grad_norm_list = []
+        mean_cos_list = []
+
+        major_sign = torch.sign(torch.sum(torch.sign(inter_model_updates), dim=0))
+        cos = torch.nn.CosineSimilarity(dim=0, eps=1e-6)
+        mean_update = torch.mean(inter_model_updates, dim=0)
+
+        for i in range(len(inter_model_updates)):
+            _, init_indices = torch.topk(torch.abs(inter_model_updates[i]), int(len(inter_model_updates[i]) * self.args.sparsity))
+            mpsa_list.append((torch.sum(torch.sign(inter_model_updates[i][init_indices]) == major_sign[init_indices]) / torch.numel(inter_model_updates[i][init_indices])).item())
+            tda_list.append(cos(inter_model_updates[i], flat_global_model).item())
+            grad_norm_list.append(torch.norm(inter_model_updates[i]).item())
+            mean_cos_list.append(cos(inter_model_updates[i], mean_update).item())
+
+        logging.info('Hybrid Method - TDA: %s' % [round(i, 4) for i in tda_list])
+        logging.info('Hybrid Method - MPSA: %s' % [round(i, 4) for i in mpsa_list])
+        logging.info('Hybrid Method - Grad Norm: %s' % [round(i, 4) for i in grad_norm_list])
+        logging.info('Hybrid Method - Mean Cos: %s' % [round(i, 4) for i in mean_cos_list])
+
+        # MZ-score计算
+        def calculate_mz_scores(values):
+            std_val = np.std(values)
+            med_val = np.median(values)
+            return [np.abs(val - med_val) / std_val for val in values]
+
+        mzscore_mpsa = calculate_mz_scores(mpsa_list)
+        mzscore_tda = calculate_mz_scores(tda_list)
+        mzscore_grad_norm = calculate_mz_scores(grad_norm_list)
+        mzscore_mean_cos = calculate_mz_scores(mean_cos_list)
+
+        logging.info('Hybrid Method - MZ-score MPSA: %s' % [round(i, 4) for i in mzscore_mpsa])
+        logging.info('Hybrid Method - MZ-score TDA: %s' % [round(i, 4) for i in mzscore_tda])
+        logging.info('Hybrid Method - MZ-score Grad Norm: %s' % [round(i, 4) for i in mzscore_grad_norm])
+        logging.info('Hybrid Method - MZ-score Mean Cos: %s' % [round(i, 4) for i in mzscore_mean_cos])
+
+        # AlignIns异常检测
+        benign_idx1 = set([i for i in range(num_chosen_clients) if mzscore_mpsa[i] < self.args.lambda_s])
+        benign_idx2 = set([i for i in range(num_chosen_clients) if mzscore_tda[i] < self.args.lambda_c])
+        benign_idx3 = set([i for i in range(num_chosen_clients) if mzscore_grad_norm[i] < getattr(self.args, 'lambda_g', 1.5)])
+        benign_idx4 = set([i for i in range(num_chosen_clients) if mzscore_mean_cos[i] < getattr(self.args, 'lambda_mean_cos', 1.5)])
+        
+        alignins_benign_set = benign_idx1.intersection(benign_idx2).intersection(benign_idx3).intersection(benign_idx4)
+        alignins_suspicious_set = set(range(num_chosen_clients)) - alignins_benign_set
+        
+        logging.info('Hybrid Method - AlignIns detected benign clients: %s' % list(alignins_benign_set))
+        logging.info('Hybrid Method - AlignIns detected suspicious clients: %s' % list(alignins_suspicious_set))
+
+        # ========== 第二阶段：对可疑客户端应用FedUP自适应剪枝 ==========
+        if len(alignins_suspicious_set) > 0 and len(alignins_benign_set) > 1:
+            # 计算良性客户端间的相似度（用于FedUP自适应剪枝）
+            benign_updates = [inter_model_updates[i] for i in alignins_benign_set]
+            if len(benign_updates) > 1:
+                benign_similarities = []
+                for i in range(len(benign_updates)):
+                    for j in range(i+1, len(benign_updates)):
+                        sim = cos(benign_updates[i], benign_updates[j]).item()
+                        benign_similarities.append(sim)
+                
+                # 计算归一化相似度z
+                if len(benign_similarities) > 0:
+                    avg_similarity = np.mean(benign_similarities)
+                    z = max(0, min(1, (avg_similarity + 1) / 2))  # 将[-1,1]映射到[0,1]
+                else:
+                    z = 0.5
+            else:
+                z = 0.5
+            
+            # FedUP自适应剪枝比例计算
+            p_max = getattr(self.args, 'fedup_p_max', 0.15)
+            p_min = getattr(self.args, 'fedup_p_min', 0.01)
+            gamma = getattr(self.args, 'fedup_gamma', 5)
+            adaptive_pruning_ratio = (p_max - p_min) * (z ** gamma) + p_min
+            
+            logging.info('Hybrid Method - Benign similarity z: %.4f' % z)
+            logging.info('Hybrid Method - Adaptive pruning ratio: %.4f' % adaptive_pruning_ratio)
+            
+            # 对可疑客户端应用FedUP剪枝
+            suspicious_updates = [inter_model_updates[i] for i in alignins_suspicious_set]
+            avg_suspicious_update = torch.mean(torch.stack(suspicious_updates), dim=0)
+            
+            # 计算权重重要性并生成剪枝掩码
+            weight_diff = avg_suspicious_update
+            weight_importance = (weight_diff ** 2) * torch.abs(flat_global_model)
+            
+            # 选择前adaptive_pruning_ratio比例的权重进行剪枝
+            num_params_to_prune = int(len(weight_importance) * adaptive_pruning_ratio)
+            if num_params_to_prune > 0:
+                _, top_indices = torch.topk(weight_importance, num_params_to_prune)
+                unlearn_mask = torch.ones_like(flat_global_model)
+                unlearn_mask[top_indices] = 0
+                
+                logging.info('Hybrid Method - Applied FedUP pruning to %d suspicious clients, pruned %d/%d parameters' % 
+                           (len(alignins_suspicious_set), num_params_to_prune, len(weight_importance)))
+                
+                # 对可疑客户端应用剪枝掩码
+                pruned_updates = []
+                for i, idx in enumerate(alignins_suspicious_set):
+                    pruned_update = inter_model_updates[idx] * unlearn_mask
+                    pruned_updates.append(pruned_update)
+                    inter_model_updates[idx] = pruned_update
+            else:
+                logging.info('Hybrid Method - No pruning applied (adaptive_pruning_ratio too small)')
+        
+        # ========== 第三阶段：最终聚合 ==========
+        # 重新评估经过剪枝后的客户端
+        final_benign_idx = list(alignins_benign_set)
+        
+        # 如果没有良性客户端，返回零更新
+        if len(final_benign_idx) == 0:
+            logging.warning('Hybrid Method - No benign clients found, returning zero update')
+            return torch.zeros_like(local_updates[0])
+        
+        # 选择最终用于聚合的更新
+        final_updates = torch.stack([inter_model_updates[i] for i in final_benign_idx], dim=0)
+        
+        # 模型裁剪（继承AlignIns的后处理）
+        updates_norm = torch.norm(final_updates, dim=1).reshape((-1, 1))
+        norm_clip = updates_norm.median(dim=0)[0].item()
+        updates_norm_clipped = torch.clamp(updates_norm, 0, norm_clip, out=None)
+        final_updates = (final_updates / updates_norm) * updates_norm_clipped
+        
+        # 计算性能指标
+        correct = sum(1 for idx in final_benign_idx if idx >= len(malicious_id))
+        TPR = correct / len(benign_id) if len(benign_id) > 0 else 0
+        
+        if len(malicious_id) == 0:
+            FPR = 0
+        else:
+            wrong = sum(1 for idx in final_benign_idx if idx < len(malicious_id))
+            FPR = wrong / len(malicious_id)
+        
+        logging.info('Hybrid Method - Final selected clients: %s' % final_benign_idx)
+        logging.info('Hybrid Method - TPR: %.4f, FPR: %.4f' % (TPR, FPR))
+        
+        # 最终聚合
+        current_dict = {}
+        for i, idx in enumerate(final_benign_idx):
+            current_dict[chosen_clients[idx]] = final_updates[i]
+        
         aggregated_update = self.agg_avg(current_dict)
         return aggregated_update
 

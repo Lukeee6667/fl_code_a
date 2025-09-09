@@ -40,9 +40,10 @@ def run_basic_fedup():
         "--server_lr", "1.0",
         "--aggr", "fedup",
         "--attack", "badnet",
-        "--fedup_pruning_ratio", "0.1",
+        "--fedup_p_max", "0.15",
+        "--fedup_p_min", "0.01",
+        "--fedup_gamma", "5",
         "--fedup_sensitivity_threshold", "0.5",
-        "--fedup_unlearn_threshold", "0.8",
         "--exp_name_extra", "fedup_basic"
     ]
     
@@ -83,9 +84,10 @@ def run_custom_fedup():
         "--server_lr", "1.0",
         "--aggr", "fedup",
         "--attack", "DBA",  # 使用DBA攻击
-        "--fedup_pruning_ratio", "0.2",  # 更高的剪枝比例
+        "--fedup_p_max", "0.25",  # 更高的剪枝比例
+        "--fedup_p_min", "0.02",
+        "--fedup_gamma", "8",
         "--fedup_sensitivity_threshold", "0.3",  # 更敏感的检测
-        "--fedup_unlearn_threshold", "0.9",
         "--exp_name_extra", "fedup_aggressive"
     ]
     
@@ -157,9 +159,10 @@ def run_comparison_experiments():
         # 为FedUP添加特定参数
         if exp["aggr"] == "fedup":
             cmd.extend([
-                "--fedup_pruning_ratio", "0.15",
-                "--fedup_sensitivity_threshold", "0.4",
-                "--fedup_unlearn_threshold", "0.8"
+                "--fedup_p_max", "0.15",
+                "--fedup_p_min", "0.01",
+                "--fedup_gamma", "5",
+                "--fedup_sensitivity_threshold", "0.4"
             ])
         
         print("执行命令:")

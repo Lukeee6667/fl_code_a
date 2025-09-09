@@ -134,6 +134,7 @@ if __name__ == "__main__":
             "foolsgold",
             "rfa",
             "fedup",
+            "alignins_fedup_hybrid",
         ],
         help="aggregation function to aggregate agents' local weights",
     )
@@ -151,10 +152,15 @@ if __name__ == "__main__":
     parser.add_argument("--lambda_c", type=float, default=1.0)
     parser.add_argument("--lambda_g", type=float, default=1.5)
     
-    # FedUP相关参数
-    parser.add_argument("--fedup_pruning_ratio", type=float, default=0.1, help="FedUP剪枝比例")
-    parser.add_argument("--fedup_sensitivity_threshold", type=float, default=0.5, help="FedUP敏感度阈值")
-    parser.add_argument("--fedup_unlearn_threshold", type=float, default=0.8, help="FedUP遗忘阈值")
+    # FedUP相关参数（基于论文）
+    parser.add_argument('--fedup_p_max', type=float, default=0.15,
+                        help='FedUP最大剪枝率 (default: 0.15)')
+    parser.add_argument('--fedup_p_min', type=float, default=0.01,
+                        help='FedUP最小剪枝率 (default: 0.01)')
+    parser.add_argument('--fedup_gamma', type=float, default=5,
+                        help='FedUP曲线陡度参数 (default: 5)')
+    parser.add_argument('--fedup_sensitivity_threshold', type=float, default=0.5,
+                        help='FedUP异常检测敏感度阈值 (default: 0.5)')
 
 
     args = parser.parse_args()

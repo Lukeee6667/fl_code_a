@@ -30,25 +30,67 @@ class FedUPUnlearning:
     2. Algorithm 2: 应用遗忘掩码进行剪枝
     """
     
-    def __init__(self, pruning_ratio: float = 0.1, rate_limit_threshold: int = 5):
+    def __init__(self, p_max: float = 0.15, p_min: float = 0.01, gamma: float = 5, rate_limit_threshold: int = 5):
         """
         初始化FedUP遗忘器
         
         Args:
-            pruning_ratio: 剪枝比例P，默认10%
+            p_max: 最大剪枝率，默认0.15 (15%)
+            p_min: 最小剪枝率，默认0.01 (1%)
+            gamma: 控制曲线陡度的指数，默认5
             rate_limit_threshold: 速率限制阈值T，防止DoS攻击
         """
-        self.pruning_ratio = pruning_ratio
+        self.p_max = p_max
+        self.p_min = p_min
+        self.gamma = gamma
         self.rate_limit_threshold = rate_limit_threshold
         self.unlearning_count = 0  # 记录遗忘操作次数
         
+    def calculate_adaptive_pruning_ratio(self, benign_models: List[torch.nn.Module]) -> float:
+        """
+        根据论文公式5计算自适应剪枝比例
+        
+        Args:
+            benign_models: 良性客户端模型列表
+            
+        Returns:
+            float: 自适应剪枝比例
+        """
+        if len(benign_models) < 2:
+            return self.p_min
+        
+        # 计算客户端模型间的余弦相似度（使用最后一层）
+        similarities = []
+        for i in range(len(benign_models)):
+            for j in range(i + 1, len(benign_models)):
+                # 获取最后一层参数
+                params_i = list(benign_models[i].parameters())[-1].flatten()
+                params_j = list(benign_models[j].parameters())[-1].flatten()
+                
+                # 计算余弦相似度
+                cos_sim = torch.nn.functional.cosine_similarity(
+                    params_i.unsqueeze(0), params_j.unsqueeze(0)
+                ).item()
+                similarities.append(cos_sim)
+        
+        # 计算平均相似度
+        avg_similarity = sum(similarities) / len(similarities)
+        
+        # 归一化到[0,1]区间（假设收敛时相似度在[0.5,1]之间）
+        z = max(0, min(1, (avg_similarity - 0.5) / 0.5))
+        
+        # 应用论文公式5
+        pruning_ratio = (self.p_max - self.p_min) * (z ** self.gamma) + self.p_min
+        
+        return pruning_ratio
+    
     def generate_unlearning_mask(self, 
                                 local_models: Dict[int, torch.nn.Module],
                                 global_model: torch.nn.Module,
                                 malicious_client_ids: List[int],
                                 benign_client_ids: List[int]) -> Dict[str, torch.Tensor]:
         """
-        Algorithm 1: 生成遗忘掩码
+        Algorithm 1: 生成遗忘掩码，基于论文的排名机制
         
         Args:
             local_models: 所有客户端的本地模型 {client_id: model}
@@ -73,16 +115,19 @@ class FedUPUnlearning:
         # Step 4: 计算良性模型平均
         avg_benign_model = self._average_models(benign_models)
         
-        # Step 5: 计算差异的平方
+        # Step 5: 计算自适应剪枝比例
+        adaptive_pruning_ratio = self.calculate_adaptive_pruning_ratio(benign_models)
+        
+        # Step 6: 计算差异的平方
         difference_squared = self._compute_difference_squared(avg_malicious_model, avg_benign_model)
         
-        # Step 6: 用全局模型权重缩放差异
+        # Step 7: 用全局模型权重缩放差异
         rank = self._scale_by_global_model(difference_squared, global_model)
         
-        # Step 7-12: 为每层生成掩码
-        mask = self._generate_layer_masks(rank)
+        # Step 8-12: 为每层生成掩码
+        mask = self._generate_layer_masks(rank, adaptive_pruning_ratio)
         
-        logging.info(f"遗忘掩码生成完成，剪枝比例: {self.pruning_ratio}")
+        logging.info(f"遗忘掩码生成完成，自适应剪枝比例: {adaptive_pruning_ratio:.4f}")
         return mask
     
     def apply_unlearning_mask(self, 
@@ -230,7 +275,7 @@ class FedUPUnlearning:
         
         return rank
     
-    def _generate_layer_masks(self, rank: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def _generate_layer_masks(self, rank: Dict[str, torch.Tensor], pruning_ratio: float) -> Dict[str, torch.Tensor]:
         """为每层生成剪枝掩码"""
         mask = {}
         
@@ -240,8 +285,8 @@ class FedUPUnlearning:
                 flat_rank = layer_rank.flatten()
                 sorted_indices = torch.argsort(flat_rank, descending=True)
                 
-                # 选择前P%的权重进行剪枝
-                num_to_prune = int(len(flat_rank) * self.pruning_ratio)
+                # 选择前pruning_ratio%的权重进行剪枝
+                num_to_prune = int(len(flat_rank) * pruning_ratio)
                 prune_indices = sorted_indices[:num_to_prune]
                 
                 # 生成二进制掩码
@@ -306,7 +351,9 @@ def compare_with_alignins(fedup_unlearning: FedUPUnlearning):
     print("   - FedUP: 高效遗忘，避免重训练，但需要明确知道恶意客户端")
     
     print(f"\n5. FedUP配置参数:")
-    print(f"   - 剪枝比例: {fedup_unlearning.pruning_ratio}")
+    print(f"   - 最大剪枝率: {fedup_unlearning.p_max}")
+    print(f"   - 最小剪枝率: {fedup_unlearning.p_min}")
+    print(f"   - 曲线陡度参数: {fedup_unlearning.gamma}")
     print(f"   - 速率限制阈值: {fedup_unlearning.rate_limit_threshold}")
 
 
@@ -318,7 +365,7 @@ if __name__ == "__main__":
     print("="*50)
     
     # 创建FedUP遗忘器
-    fedup = FedUPUnlearning(pruning_ratio=0.1, rate_limit_threshold=5)
+    fedup = FedUPUnlearning(p_max=0.15, p_min=0.01, gamma=5, rate_limit_threshold=5)
     
     # 方法对比分析
     compare_with_alignins(fedup)
