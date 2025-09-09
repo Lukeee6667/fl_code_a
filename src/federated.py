@@ -115,12 +115,25 @@ if __name__ == "__main__":
         choices=[
             "avg",
             "alignins",
+            "alignins_v",
+            "alignins_g_v",
+            "alignins_g_v2",
+            "alignins_g_v2_onepic",
+            "alignins_layer",
+            "alignins_layer_lsd",
+            "alignins_layer_3p",
+            "alignins_3_m",
+            "alignins_3_m_noniid_badnet",
+            "alignins_3_m_noniid_dba",
+            "alignins_3_m_noniid_dba",
+            "alignins_plr",
             "rlr",
             "mkrum",
             "mmetric",
             "lockdown",
             "foolsgold",
             "rfa",
+            "fedup",
         ],
         help="aggregation function to aggregate agents' local weights",
     )
@@ -136,6 +149,13 @@ if __name__ == "__main__":
     parser.add_argument("--sparsity", type=float, default=0.3)
     parser.add_argument("--lambda_s", type=float, default=1.0)
     parser.add_argument("--lambda_c", type=float, default=1.0)
+    parser.add_argument("--lambda_g", type=float, default=1.5)
+    
+    # FedUP相关参数
+    parser.add_argument("--fedup_pruning_ratio", type=float, default=0.1, help="FedUP剪枝比例")
+    parser.add_argument("--fedup_sensitivity_threshold", type=float, default=0.5, help="FedUP敏感度阈值")
+    parser.add_argument("--fedup_unlearn_threshold", type=float, default=0.8, help="FedUP遗忘阈值")
+
 
     args = parser.parse_args()
 
@@ -216,6 +236,40 @@ if __name__ == "__main__":
         num_workers=args.num_workers,
         pin_memory=False,
     )
+    # auxiliary_data_size = min(500, len(val_dataset))
+    # auxiliary_indices = np.random.choice(len(val_dataset), auxiliary_data_size, replace=False)
+    # auxiliary_dataset = torch.utils.data.Subset(val_dataset, auxiliary_indices)
+    
+    # auxiliary_data_loader = DataLoader(
+    #     auxiliary_dataset,
+    #     batch_size=args.bs,
+    #     shuffle=False,
+    #     num_workers=args.num_workers,
+    #     pin_memory=False
+    # )
+    auxiliary_data_loader = None
+    if args.aggr == 'alignins_plr':
+        # 先导入prepare_auxiliary_data函数
+        from aggregation import Aggregation
+        
+        # 创建一个临时的Aggregation实例来使用prepare_auxiliary_data函数
+        temp_aggregator = Aggregation({}, 0, args)
+        
+        # 准备辅助数据加载器
+        logging.info("为PLR分析准备辅助数据...")
+        auxiliary_data_loader = temp_aggregator.prepare_auxiliary_data(
+            args=args,
+            dataset_name=args.data,
+            num_samples=min(500, len(val_dataset))
+        )
+        
+        if auxiliary_data_loader is None:
+            logging.warning("无法创建辅助数据加载器，PLR分析可能无法正常工作")
+        else:
+            logging.info("成功创建辅助数据加载器")
+            
+        # 删除临时聚合器，防止内存泄漏
+        del temp_aggregator
 
     # initialize a model, and the agents
     global_model = models.get_model(args.data, args).to(args.device)
@@ -324,7 +378,7 @@ if __name__ == "__main__":
 
         # aggregate params obtained by agents and update the global params
         updates_dict, neurotoxin_mask = aggregator.aggregate_updates(
-            global_model, agent_updates_dict
+            global_model, agent_updates_dict, auxiliary_data_loader, rnd
         )
 
         # inference in every args.snap rounds
