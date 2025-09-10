@@ -2709,9 +2709,11 @@ class Aggregation():
             logging.warning('Hybrid Method - No available clients found, returning zero update')
             return torch.zeros_like(local_updates[0])
         
-        # 转换为张量
+        # 转换为张量（确保设备一致性）
         final_updates_tensor = torch.stack(final_updates, dim=0)
-        final_weights_tensor = torch.tensor(final_weights, dtype=torch.float32).reshape(-1, 1)
+        # 确保权重张量与更新张量在同一设备上
+        device = final_updates_tensor.device
+        final_weights_tensor = torch.tensor(final_weights, dtype=torch.float32, device=device).reshape(-1, 1)
         
         # 自适应范数裁剪
         updates_norm = torch.norm(final_updates_tensor, dim=1).reshape((-1, 1))
@@ -2726,7 +2728,7 @@ class Aggregation():
         updates_norm_clipped = torch.clamp(updates_norm, 0, norm_clip, out=None)
         final_updates_tensor = (final_updates_tensor / updates_norm) * updates_norm_clipped
         
-        # 加权聚合
+        # 加权聚合（确保所有张量在同一设备）
         weighted_updates = final_updates_tensor * final_weights_tensor
         aggregated_update = torch.sum(weighted_updates, dim=0) / torch.sum(final_weights_tensor)
         
