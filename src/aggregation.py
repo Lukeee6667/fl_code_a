@@ -2507,12 +2507,13 @@ class Aggregation():
 
     def agg_alignins_fedup_hybrid(self, agent_updates_dict, flat_global_model, global_model, current_round=None):
         """
-        混合方法：结合AlignIns的多指标异常检测和FedUP的自适应剪枝策略
+        改进的混合方法：结合AlignIns的多指标异常检测和FedUP的自适应剪枝策略
         
-        步骤：
-        1. 使用AlignIns的多指标检测（TDA、MPSA、梯度范数、余弦相似度）识别异常客户端
-        2. 对检测到的异常客户端，应用FedUP的自适应剪枝策略
-        3. 结合剪枝后的更新进行聚合
+        改进策略：
+        1. 使用更宽松的AlignIns检测阈值，将客户端分为三类：良性、可疑、恶意
+        2. 对可疑客户端应用FedUP自适应剪枝，对恶意客户端直接排除
+        3. 结合良性客户端和剪枝后的可疑客户端进行聚合
+        4. 动态调整检测阈值以平衡clean accuracy和attack success ratio
         """
         local_updates = []
         benign_id = []
@@ -2567,23 +2568,49 @@ class Aggregation():
         logging.info('Hybrid Method - MZ-score Grad Norm: %s' % [round(i, 4) for i in mzscore_grad_norm])
         logging.info('Hybrid Method - MZ-score Mean Cos: %s' % [round(i, 4) for i in mzscore_mean_cos])
 
-        # AlignIns异常检测
-        benign_idx1 = set([i for i in range(num_chosen_clients) if mzscore_mpsa[i] < self.args.lambda_s])
-        benign_idx2 = set([i for i in range(num_chosen_clients) if mzscore_tda[i] < self.args.lambda_c])
-        benign_idx3 = set([i for i in range(num_chosen_clients) if mzscore_grad_norm[i] < getattr(self.args, 'lambda_g', 1.5)])
-        benign_idx4 = set([i for i in range(num_chosen_clients) if mzscore_mean_cos[i] < getattr(self.args, 'lambda_mean_cos', 1.5)])
+        # 改进的三层检测策略
+        # 第一层：严格阈值检测明确的良性客户端
+        strict_lambda_s = self.args.lambda_s * 0.8  # 更严格的阈值
+        strict_lambda_c = self.args.lambda_c * 0.8
+        strict_lambda_g = getattr(self.args, 'lambda_g', 1.5) * 0.8
+        strict_lambda_mean_cos = getattr(self.args, 'lambda_mean_cos', 1.5) * 0.8
         
-        alignins_benign_set = benign_idx1.intersection(benign_idx2).intersection(benign_idx3).intersection(benign_idx4)
-        alignins_suspicious_set = set(range(num_chosen_clients)) - alignins_benign_set
+        benign_idx1_strict = set([i for i in range(num_chosen_clients) if mzscore_mpsa[i] < strict_lambda_s])
+        benign_idx2_strict = set([i for i in range(num_chosen_clients) if mzscore_tda[i] < strict_lambda_c])
+        benign_idx3_strict = set([i for i in range(num_chosen_clients) if mzscore_grad_norm[i] < strict_lambda_g])
+        benign_idx4_strict = set([i for i in range(num_chosen_clients) if mzscore_mean_cos[i] < strict_lambda_mean_cos])
         
-        logging.info('Hybrid Method - AlignIns detected benign clients: %s' % list(alignins_benign_set))
-        logging.info('Hybrid Method - AlignIns detected suspicious clients: %s' % list(alignins_suspicious_set))
+        # 明确良性客户端（通过所有严格检测）
+        clear_benign_set = benign_idx1_strict.intersection(benign_idx2_strict).intersection(benign_idx3_strict).intersection(benign_idx4_strict)
+        
+        # 第二层：宽松阈值检测明确的恶意客户端
+        loose_lambda_s = self.args.lambda_s * 1.5  # 更宽松的阈值
+        loose_lambda_c = self.args.lambda_c * 1.5
+        loose_lambda_g = getattr(self.args, 'lambda_g', 1.5) * 1.5
+        loose_lambda_mean_cos = getattr(self.args, 'lambda_mean_cos', 1.5) * 1.5
+        
+        # 恶意客户端：在任意一个指标上超过宽松阈值
+        malicious_idx1 = set([i for i in range(num_chosen_clients) if mzscore_mpsa[i] > loose_lambda_s])
+        malicious_idx2 = set([i for i in range(num_chosen_clients) if mzscore_tda[i] > loose_lambda_c])
+        malicious_idx3 = set([i for i in range(num_chosen_clients) if mzscore_grad_norm[i] > loose_lambda_g])
+        malicious_idx4 = set([i for i in range(num_chosen_clients) if mzscore_mean_cos[i] > loose_lambda_mean_cos])
+        
+        clear_malicious_set = malicious_idx1.union(malicious_idx2).union(malicious_idx3).union(malicious_idx4)
+        
+        # 第三层：可疑客户端（介于良性和恶意之间）
+        suspicious_set = set(range(num_chosen_clients)) - clear_benign_set - clear_malicious_set
+        
+        logging.info('Hybrid Method - Clear benign clients: %s' % list(clear_benign_set))
+        logging.info('Hybrid Method - Suspicious clients (for FedUP): %s' % list(suspicious_set))
+        logging.info('Hybrid Method - Clear malicious clients (excluded): %s' % list(clear_malicious_set))
 
         # ========== 第二阶段：对可疑客户端应用FedUP自适应剪枝 ==========
-        if len(alignins_suspicious_set) > 0 and len(alignins_benign_set) > 1:
+        pruned_suspicious_updates = []
+        
+        if len(suspicious_set) > 0:
             # 计算良性客户端间的相似度（用于FedUP自适应剪枝）
-            benign_updates = [inter_model_updates[i] for i in alignins_benign_set]
-            if len(benign_updates) > 1:
+            if len(clear_benign_set) > 1:
+                benign_updates = [inter_model_updates[i] for i in clear_benign_set]
                 benign_similarities = []
                 for i in range(len(benign_updates)):
                     for j in range(i+1, len(benign_updates)):
@@ -2597,81 +2624,133 @@ class Aggregation():
                 else:
                     z = 0.5
             else:
-                z = 0.5
+                z = 0.3  # 当良性客户端不足时，使用更保守的剪枝
             
-            # FedUP自适应剪枝比例计算
-            p_max = getattr(self.args, 'fedup_p_max', 0.15)
-            p_min = getattr(self.args, 'fedup_p_min', 0.01)
-            gamma = getattr(self.args, 'fedup_gamma', 5)
-            adaptive_pruning_ratio = (p_max - p_min) * (z ** gamma) + p_min
+            # 改进的FedUP自适应剪枝比例计算
+            p_max = getattr(self.args, 'fedup_p_max', 0.8)  # 使用更大的剪枝范围
+            p_min = getattr(self.args, 'fedup_p_min', 0.1)
+            gamma = getattr(self.args, 'fedup_gamma', 3)  # 降低gamma值，使剪枝更敏感
             
-            logging.info('Hybrid Method - Benign similarity z: %.4f' % z)
-            logging.info('Hybrid Method - Adaptive pruning ratio: %.4f' % adaptive_pruning_ratio)
+            # 基于可疑程度动态调整剪枝比例
+            suspicious_updates = [inter_model_updates[i] for i in suspicious_set]
             
-            # 对可疑客户端应用FedUP剪枝
-            suspicious_updates = [inter_model_updates[i] for i in alignins_suspicious_set]
-            avg_suspicious_update = torch.mean(torch.stack(suspicious_updates), dim=0)
-            
-            # 计算权重重要性并生成剪枝掩码
-            weight_diff = avg_suspicious_update
-            weight_importance = (weight_diff ** 2) * torch.abs(flat_global_model)
-            
-            # 选择前adaptive_pruning_ratio比例的权重进行剪枝
-            num_params_to_prune = int(len(weight_importance) * adaptive_pruning_ratio)
-            if num_params_to_prune > 0:
-                _, top_indices = torch.topk(weight_importance, num_params_to_prune)
-                unlearn_mask = torch.ones_like(flat_global_model)
-                unlearn_mask[top_indices] = 0
+            for idx in suspicious_set:
+                # 为每个可疑客户端计算个性化的剪枝比例
+                client_suspicion_score = 0
+                client_suspicion_score += max(0, mzscore_mpsa[idx] - strict_lambda_s) / (loose_lambda_s - strict_lambda_s)
+                client_suspicion_score += max(0, mzscore_tda[idx] - strict_lambda_c) / (loose_lambda_c - strict_lambda_c)
+                client_suspicion_score += max(0, mzscore_grad_norm[idx] - strict_lambda_g) / (loose_lambda_g - strict_lambda_g)
+                client_suspicion_score += max(0, mzscore_mean_cos[idx] - strict_lambda_mean_cos) / (loose_lambda_mean_cos - strict_lambda_mean_cos)
+                client_suspicion_score = min(1.0, client_suspicion_score / 4)  # 归一化到[0,1]
                 
-                logging.info('Hybrid Method - Applied FedUP pruning to %d suspicious clients, pruned %d/%d parameters' % 
-                           (len(alignins_suspicious_set), num_params_to_prune, len(weight_importance)))
+                # 结合良性相似度和可疑程度计算剪枝比例
+                combined_factor = (1 - z) * 0.3 + client_suspicion_score * 0.7  # 可疑程度权重更大
+                adaptive_pruning_ratio = p_min + (p_max - p_min) * (combined_factor ** gamma)
                 
-                # 对可疑客户端应用剪枝掩码
-                pruned_updates = []
-                for i, idx in enumerate(alignins_suspicious_set):
-                    pruned_update = inter_model_updates[idx] * unlearn_mask
-                    pruned_updates.append(pruned_update)
-                    inter_model_updates[idx] = pruned_update
-            else:
-                logging.info('Hybrid Method - No pruning applied (adaptive_pruning_ratio too small)')
+                logging.info('Hybrid Method - Client %d suspicion score: %.4f, pruning ratio: %.4f' % 
+                           (idx, client_suspicion_score, adaptive_pruning_ratio))
+                
+                # 计算该客户端的权重重要性
+                client_update = inter_model_updates[idx]
+                weight_diff = client_update - flat_global_model
+                weight_importance = torch.abs(weight_diff) * torch.abs(flat_global_model)
+                
+                # 应用个性化剪枝
+                num_params_to_prune = int(len(weight_importance) * adaptive_pruning_ratio)
+                if num_params_to_prune > 0:
+                    _, top_indices = torch.topk(weight_importance, num_params_to_prune)
+                    unlearn_mask = torch.ones_like(flat_global_model)
+                    unlearn_mask[top_indices] = 0
+                    
+                    # 应用剪枝掩码
+                    pruned_update = client_update * unlearn_mask
+                    pruned_suspicious_updates.append(pruned_update)
+                    
+                    logging.info('Hybrid Method - Pruned %d/%d parameters for suspicious client %d' % 
+                               (num_params_to_prune, len(weight_importance), idx))
+                else:
+                    pruned_suspicious_updates.append(client_update)
+                    logging.info('Hybrid Method - No pruning applied for client %d (ratio too small)' % idx)
         
-        # ========== 第三阶段：最终聚合 ==========
-        # 重新评估经过剪枝后的客户端
-        final_benign_idx = list(alignins_benign_set)
+        logging.info('Hybrid Method - Benign similarity z: %.4f' % z)
+        logging.info('Hybrid Method - Processed %d suspicious clients with FedUP pruning' % len(suspicious_set))
         
-        # 如果没有良性客户端，返回零更新
-        if len(final_benign_idx) == 0:
-            logging.warning('Hybrid Method - No benign clients found, returning zero update')
+        # ========== 第三阶段：智能加权聚合 ==========
+        # 准备最终聚合的更新和权重
+        final_updates = []
+        final_weights = []
+        final_client_ids = []
+        
+        # 添加明确良性客户端（高权重）
+        for idx in clear_benign_set:
+            final_updates.append(inter_model_updates[idx])
+            final_weights.append(1.0)  # 良性客户端权重为1
+            final_client_ids.append(idx)
+        
+        # 添加剪枝后的可疑客户端（降低权重）
+        for i, idx in enumerate(suspicious_set):
+            if i < len(pruned_suspicious_updates):
+                final_updates.append(pruned_suspicious_updates[i])
+                # 基于可疑程度动态调整权重
+                client_suspicion_score = 0
+                client_suspicion_score += max(0, mzscore_mpsa[idx] - strict_lambda_s) / (loose_lambda_s - strict_lambda_s)
+                client_suspicion_score += max(0, mzscore_tda[idx] - strict_lambda_c) / (loose_lambda_c - strict_lambda_c)
+                client_suspicion_score += max(0, mzscore_grad_norm[idx] - strict_lambda_g) / (loose_lambda_g - strict_lambda_g)
+                client_suspicion_score += max(0, mzscore_mean_cos[idx] - strict_lambda_mean_cos) / (loose_lambda_mean_cos - strict_lambda_mean_cos)
+                client_suspicion_score = min(1.0, client_suspicion_score / 4)
+                
+                # 可疑客户端权重：0.1到0.6之间
+                weight = 0.6 - 0.5 * client_suspicion_score
+                final_weights.append(weight)
+                final_client_ids.append(idx)
+        
+        # 如果没有可用客户端，返回零更新
+        if len(final_updates) == 0:
+            logging.warning('Hybrid Method - No available clients found, returning zero update')
             return torch.zeros_like(local_updates[0])
         
-        # 选择最终用于聚合的更新
-        final_updates = torch.stack([inter_model_updates[i] for i in final_benign_idx], dim=0)
+        # 转换为张量
+        final_updates_tensor = torch.stack(final_updates, dim=0)
+        final_weights_tensor = torch.tensor(final_weights, dtype=torch.float32).reshape(-1, 1)
         
-        # 模型裁剪（继承AlignIns的后处理）
-        updates_norm = torch.norm(final_updates, dim=1).reshape((-1, 1))
-        norm_clip = updates_norm.median(dim=0)[0].item()
+        # 自适应范数裁剪
+        updates_norm = torch.norm(final_updates_tensor, dim=1).reshape((-1, 1))
+        # 使用加权中位数而不是简单中位数
+        sorted_norms, sorted_indices = torch.sort(updates_norm.flatten())
+        sorted_weights = final_weights_tensor.flatten()[sorted_indices]
+        cumsum_weights = torch.cumsum(sorted_weights, dim=0)
+        total_weight = cumsum_weights[-1]
+        median_idx = torch.searchsorted(cumsum_weights, total_weight / 2)
+        norm_clip = sorted_norms[median_idx].item()
+        
         updates_norm_clipped = torch.clamp(updates_norm, 0, norm_clip, out=None)
-        final_updates = (final_updates / updates_norm) * updates_norm_clipped
+        final_updates_tensor = (final_updates_tensor / updates_norm) * updates_norm_clipped
+        
+        # 加权聚合
+        weighted_updates = final_updates_tensor * final_weights_tensor
+        aggregated_update = torch.sum(weighted_updates, dim=0) / torch.sum(final_weights_tensor)
         
         # 计算性能指标
-        correct = sum(1 for idx in final_benign_idx if idx >= len(malicious_id))
-        TPR = correct / len(benign_id) if len(benign_id) > 0 else 0
+        benign_selected = sum(1 for idx in final_client_ids if idx >= len(malicious_id))
+        malicious_selected = sum(1 for idx in final_client_ids if idx < len(malicious_id))
         
-        if len(malicious_id) == 0:
-            FPR = 0
-        else:
-            wrong = sum(1 for idx in final_benign_idx if idx < len(malicious_id))
-            FPR = wrong / len(malicious_id)
+        TPR = benign_selected / len(benign_id) if len(benign_id) > 0 else 0
+        FPR = malicious_selected / len(malicious_id) if len(malicious_id) > 0 else 0
         
-        logging.info('Hybrid Method - Final selected clients: %s' % final_benign_idx)
+        # 计算加权指标（考虑权重影响）
+        weighted_benign = sum(final_weights[i] for i, idx in enumerate(final_client_ids) if idx >= len(malicious_id))
+        weighted_malicious = sum(final_weights[i] for i, idx in enumerate(final_client_ids) if idx < len(malicious_id))
+        total_weighted = weighted_benign + weighted_malicious
+        
+        weighted_TPR = weighted_benign / len(benign_id) if len(benign_id) > 0 else 0
+        weighted_FPR = weighted_malicious / len(malicious_id) if len(malicious_id) > 0 else 0
+        
+        logging.info('Hybrid Method - Final clients: %d benign + %d suspicious (pruned), excluded %d malicious' % 
+                   (len(clear_benign_set), len(suspicious_set), len(clear_malicious_set)))
         logging.info('Hybrid Method - TPR: %.4f, FPR: %.4f' % (TPR, FPR))
+        logging.info('Hybrid Method - Weighted TPR: %.4f, Weighted FPR: %.4f' % (weighted_TPR, weighted_FPR))
+        logging.info('Hybrid Method - Client weights: %s' % [round(w, 3) for w in final_weights])
         
-        # 最终聚合
-        current_dict = {}
-        for i, idx in enumerate(final_benign_idx):
-            current_dict[chosen_clients[idx]] = final_updates[i]
-        
-        aggregated_update = self.agg_avg(current_dict)
         return aggregated_update
 
     def agg_alignins_layer(self, agent_updates_dict, flat_global_model,global_model):
