@@ -2583,11 +2583,11 @@ class Aggregation():
         # 明确良性客户端（通过所有严格检测）
         clear_benign_set = benign_idx1_strict.intersection(benign_idx2_strict).intersection(benign_idx3_strict).intersection(benign_idx4_strict)
         
-        # 第二层：宽松阈值检测明确的恶意客户端
-        loose_lambda_s = self.args.lambda_s * 1.5  # 更宽松的阈值
-        loose_lambda_c = self.args.lambda_c * 1.5
-        loose_lambda_g = getattr(self.args, 'lambda_g', 1.5) * 1.5
-        loose_lambda_mean_cos = getattr(self.args, 'lambda_mean_cos', 1.5) * 1.5
+        # 第二层：标准阈值检测明确的恶意客户端
+        loose_lambda_s = self.args.lambda_s * 1.0  # 使用标准阈值
+        loose_lambda_c = self.args.lambda_c * 1.0
+        loose_lambda_g = getattr(self.args, 'lambda_g', 1.5) * 1.0
+        loose_lambda_mean_cos = getattr(self.args, 'lambda_mean_cos', 1.5) * 1.0
         
         # 恶意客户端：在任意一个指标上超过宽松阈值
         malicious_idx1 = set([i for i in range(num_chosen_clients) if mzscore_mpsa[i] > loose_lambda_s])
