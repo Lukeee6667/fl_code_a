@@ -2604,6 +2604,152 @@ class Aggregation():
         logging.info('Hybrid Method - Suspicious clients (for FedUP): %s' % list(suspicious_set))
         logging.info('Hybrid Method - Clear malicious clients (excluded): %s' % list(clear_malicious_set))
 
+        ######## 添加可视化功能 ########
+        import matplotlib.pyplot as plt
+        import os
+        import datetime
+        
+        # 只有在提供了current_round参数且current_round是10的倍数时才保存图表
+        if current_round is not None and current_round % 10 == 0:
+            # 获取当前时间作为文件夹名称的一部分
+            current_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            
+            # 确保输出目录存在，使用时间戳创建唯一的文件夹
+            base_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'visualization_results_hybrid')
+            output_dir = os.path.join(base_dir, f'round_{current_round}_{current_time}')
+            os.makedirs(output_dir, exist_ok=True)
+            
+            # 创建客户端类型列表
+            client_types = []
+            for i in range(num_chosen_clients):
+                if i < len(malicious_id):
+                    client_types.append('Malicious')
+                else:
+                    client_types.append('Benign')
+            
+            # 获取良性和恶意客户端的索引
+            benign_indices = [i for i, t in enumerate(client_types) if t == 'Benign']
+            malicious_indices = [i for i, t in enumerate(client_types) if t == 'Malicious']
+            
+            # 创建一个大图表，包含所有8个指标
+            plt.figure(figsize=(20, 16))  # 增大图表尺寸以容纳所有子图
+            
+            # 第一行：原始指标分布
+            # 绘制TDA分布图
+            plt.subplot(4, 2, 1)
+            plt.scatter([i for i in benign_indices], [tda_list[i] for i in benign_indices], 
+                    label='Benign', color='blue', marker='o', s=30)
+            plt.scatter([i for i in malicious_indices], [tda_list[i] for i in malicious_indices], 
+                    label='Malicious', color='red', marker='x', s=40)
+            tda_med = np.median(tda_list)
+            plt.axhline(y=tda_med, color='green', linestyle='-', label='Median')
+            plt.title('TDA Distribution')
+            plt.xlabel('Client Index')
+            plt.ylabel('TDA Value')
+            plt.legend()
+            
+            # 绘制MPSA分布图
+            plt.subplot(4, 2, 2)
+            plt.scatter([i for i in benign_indices], [mpsa_list[i] for i in benign_indices], 
+                    label='Benign', color='blue', marker='o', s=30)
+            plt.scatter([i for i in malicious_indices], [mpsa_list[i] for i in malicious_indices], 
+                    label='Malicious', color='red', marker='x', s=40)
+            mpsa_med = np.median(mpsa_list)
+            plt.axhline(y=mpsa_med, color='green', linestyle='-', label='Median')
+            plt.title('MPSA Distribution')
+            plt.xlabel('Client Index')
+            plt.ylabel('MPSA Value')
+            plt.legend()
+            
+            # 绘制Grad Norm分布图
+            plt.subplot(4, 2, 3)
+            plt.scatter([i for i in benign_indices], [grad_norm_list[i] for i in benign_indices], 
+                    label='Benign', color='blue', marker='o', s=30)
+            plt.scatter([i for i in malicious_indices], [grad_norm_list[i] for i in malicious_indices], 
+                    label='Malicious', color='red', marker='x', s=40)
+            grad_norm_med = np.median(grad_norm_list)
+            plt.axhline(y=grad_norm_med, color='green', linestyle='-', label='Median')
+            plt.title('Grad Norm Distribution')
+            plt.xlabel('Client Index')
+            plt.ylabel('Grad Norm Value')
+            plt.legend()
+            
+            # 绘制Mean Cos分布图
+            plt.subplot(4, 2, 4)
+            plt.scatter([i for i in benign_indices], [mean_cos_list[i] for i in benign_indices], 
+                    label='Benign', color='blue', marker='o', s=30)
+            plt.scatter([i for i in malicious_indices], [mean_cos_list[i] for i in malicious_indices], 
+                    label='Malicious', color='red', marker='x', s=40)
+            mean_cos_med = np.median(mean_cos_list)
+            plt.axhline(y=mean_cos_med, color='green', linestyle='-', label='Median')
+            plt.title('Mean Cos Distribution')
+            plt.xlabel('Client Index')
+            plt.ylabel('Mean Cos Value')
+            plt.legend()
+            
+            # 第二行：MZ-score分布（添加严格阈值虚线）
+            # 绘制TDA MZ-score分布图
+            plt.subplot(4, 2, 5)
+            plt.scatter([i for i in benign_indices], [mzscore_tda[i] for i in benign_indices], 
+                    label='Benign', color='blue', marker='o', s=30)
+            plt.scatter([i for i in malicious_indices], [mzscore_tda[i] for i in malicious_indices], 
+                    label='Malicious', color='red', marker='x', s=40)
+            plt.axhline(y=self.args.lambda_c, color='green', linestyle='-', label='Standard Threshold')
+            plt.axhline(y=strict_lambda_c, color='orange', linestyle='--', label='Strict Threshold (Benign/Suspicious)')
+            plt.title('TDA MZ-score Distribution')
+            plt.xlabel('Client Index')
+            plt.ylabel('MZ-score Value')
+            plt.legend()
+
+            # 绘制MPSA MZ-score分布图
+            plt.subplot(4, 2, 6)
+            plt.scatter([i for i in benign_indices], [mzscore_mpsa[i] for i in benign_indices], 
+                    label='Benign', color='blue', marker='o', s=30)
+            plt.scatter([i for i in malicious_indices], [mzscore_mpsa[i] for i in malicious_indices], 
+                    label='Malicious', color='red', marker='x', s=40)
+            plt.axhline(y=self.args.lambda_s, color='green', linestyle='-', label='Standard Threshold')
+            plt.axhline(y=strict_lambda_s, color='orange', linestyle='--', label='Strict Threshold (Benign/Suspicious)')
+            plt.title('MPSA MZ-score Distribution')
+            plt.xlabel('Client Index')
+            plt.ylabel('MZ-score Value')
+            plt.legend()
+            
+            # 绘制梯度范数MZ-score分布图
+            plt.subplot(4, 2, 7)
+            plt.scatter([i for i in benign_indices], [mzscore_grad_norm[i] for i in benign_indices], 
+                    label='Benign', color='blue', marker='o', s=30)
+            plt.scatter([i for i in malicious_indices], [mzscore_grad_norm[i] for i in malicious_indices], 
+                    label='Malicious', color='red', marker='x', s=40)
+            plt.axhline(y=loose_lambda_g, color='green', linestyle='-', label='Standard Threshold')
+            plt.axhline(y=strict_lambda_g, color='orange', linestyle='--', label='Strict Threshold (Benign/Suspicious)')
+            plt.title('Grad Norm MZ-score Distribution')
+            plt.xlabel('Client Index')
+            plt.ylabel('MZ-score Value')
+            plt.legend()
+
+            # 绘制与平均更新余弦相似度MZ-score分布图
+            plt.subplot(4, 2, 8)
+            plt.scatter([i for i in benign_indices], [mzscore_mean_cos[i] for i in benign_indices], 
+                    label='Benign', color='blue', marker='o', s=30)
+            plt.scatter([i for i in malicious_indices], [mzscore_mean_cos[i] for i in malicious_indices], 
+                    label='Malicious', color='red', marker='x', s=40)
+            plt.axhline(y=loose_lambda_mean_cos, color='green', linestyle='-', label='Standard Threshold')
+            plt.axhline(y=strict_lambda_mean_cos, color='orange', linestyle='--', label='Strict Threshold (Benign/Suspicious)')
+            plt.title('Mean Cos MZ-score Distribution')
+            plt.xlabel('Client Index')
+            plt.ylabel('MZ-score Value')
+            plt.legend()
+            
+            # 添加总标题
+            plt.suptitle(f'Round {current_round} - Hybrid Defense Method Analysis', fontsize=16)
+            
+            # 调整布局并保存
+            plt.tight_layout(rect=[0, 0, 1, 0.97])  # 为总标题留出空间
+            plt.savefig(os.path.join(output_dir, 'hybrid_defense_analysis.png'), dpi=300)
+            plt.close()
+            
+            logging.info(f"Hybrid Method - 保存了第 {current_round} 轮的可视化结果到 {output_dir}")
+
         # ========== 第二阶段：对可疑客户端应用FedUP自适应剪枝 ==========
         pruned_suspicious_updates = []
         
