@@ -2312,8 +2312,18 @@ class Aggregation():
             benign_indices = [i for i, t in enumerate(client_types) if t == 'Benign']
             malicious_indices = [i for i, t in enumerate(client_types) if t == 'Malicious']
             
-            # 创建一个大图表，包含所有8个指标
-            plt.figure(figsize=(20, 16))  # 增大图表尺寸以容纳所有子图
+            # 计算所有客户端之间的相似度矩阵
+            similarity_matrix = np.zeros((num_chosen_clients, num_chosen_clients))
+            for i in range(num_chosen_clients):
+                for j in range(num_chosen_clients):
+                    if i == j:
+                        similarity_matrix[i][j] = 1.0
+                    else:
+                        sim = cos(inter_model_updates[i], inter_model_updates[j]).item()
+                        similarity_matrix[i][j] = sim
+            
+            # 创建一个大图表，包含所有指标和相似度热力图
+            plt.figure(figsize=(24, 20))  # 进一步增大图表尺寸以容纳更多子图
             
             # 第一行：原始指标分布
             # 绘制TDA分布图
@@ -2636,7 +2646,7 @@ class Aggregation():
             
             # 第一行：原始指标分布
             # 绘制TDA分布图
-            plt.subplot(4, 2, 1)
+            plt.subplot(3, 3, 1)
             plt.scatter([i for i in benign_indices], [tda_list[i] for i in benign_indices], 
                     label='Benign', color='blue', marker='o', s=30)
             plt.scatter([i for i in malicious_indices], [tda_list[i] for i in malicious_indices], 
@@ -2649,7 +2659,7 @@ class Aggregation():
             plt.legend()
             
             # 绘制MPSA分布图
-            plt.subplot(4, 2, 2)
+            plt.subplot(3, 3, 2)
             plt.scatter([i for i in benign_indices], [mpsa_list[i] for i in benign_indices], 
                     label='Benign', color='blue', marker='o', s=30)
             plt.scatter([i for i in malicious_indices], [mpsa_list[i] for i in malicious_indices], 
@@ -2662,7 +2672,7 @@ class Aggregation():
             plt.legend()
             
             # 绘制Grad Norm分布图
-            plt.subplot(4, 2, 3)
+            plt.subplot(3, 3, 3)
             plt.scatter([i for i in benign_indices], [grad_norm_list[i] for i in benign_indices], 
                     label='Benign', color='blue', marker='o', s=30)
             plt.scatter([i for i in malicious_indices], [grad_norm_list[i] for i in malicious_indices], 
@@ -2674,22 +2684,9 @@ class Aggregation():
             plt.ylabel('Grad Norm Value')
             plt.legend()
             
-            # 绘制Mean Cos分布图
-            plt.subplot(4, 2, 4)
-            plt.scatter([i for i in benign_indices], [mean_cos_list[i] for i in benign_indices], 
-                    label='Benign', color='blue', marker='o', s=30)
-            plt.scatter([i for i in malicious_indices], [mean_cos_list[i] for i in malicious_indices], 
-                    label='Malicious', color='red', marker='x', s=40)
-            mean_cos_med = np.median(mean_cos_list)
-            plt.axhline(y=mean_cos_med, color='green', linestyle='-', label='Median')
-            plt.title('Mean Cos Distribution')
-            plt.xlabel('Client Index')
-            plt.ylabel('Mean Cos Value')
-            plt.legend()
-            
             # 第二行：MZ-score分布（添加严格阈值虚线）
             # 绘制TDA MZ-score分布图
-            plt.subplot(4, 2, 5)
+            plt.subplot(3, 3, 4)
             plt.scatter([i for i in benign_indices], [mzscore_tda[i] for i in benign_indices], 
                     label='Benign', color='blue', marker='o', s=30)
             plt.scatter([i for i in malicious_indices], [mzscore_tda[i] for i in malicious_indices], 
@@ -2702,7 +2699,7 @@ class Aggregation():
             plt.legend()
 
             # 绘制MPSA MZ-score分布图
-            plt.subplot(4, 2, 6)
+            plt.subplot(3, 3, 5)
             plt.scatter([i for i in benign_indices], [mzscore_mpsa[i] for i in benign_indices], 
                     label='Benign', color='blue', marker='o', s=30)
             plt.scatter([i for i in malicious_indices], [mzscore_mpsa[i] for i in malicious_indices], 
@@ -2715,7 +2712,7 @@ class Aggregation():
             plt.legend()
             
             # 绘制梯度范数MZ-score分布图
-            plt.subplot(4, 2, 7)
+            plt.subplot(3, 3, 6)
             plt.scatter([i for i in benign_indices], [mzscore_grad_norm[i] for i in benign_indices], 
                     label='Benign', color='blue', marker='o', s=30)
             plt.scatter([i for i in malicious_indices], [mzscore_grad_norm[i] for i in malicious_indices], 
@@ -2727,8 +2724,22 @@ class Aggregation():
             plt.ylabel('MZ-score Value')
             plt.legend()
 
+            # 第三行：相似度分析和综合信息
+            # 绘制Mean Cos分布图
+            plt.subplot(3, 3, 7)
+            plt.scatter([i for i in benign_indices], [mean_cos_list[i] for i in benign_indices], 
+                    label='Benign', color='blue', marker='o', s=30)
+            plt.scatter([i for i in malicious_indices], [mean_cos_list[i] for i in malicious_indices], 
+                    label='Malicious', color='red', marker='x', s=40)
+            mean_cos_med = np.median(mean_cos_list)
+            plt.axhline(y=mean_cos_med, color='green', linestyle='-', label='Median')
+            plt.title('Mean Cos Distribution')
+            plt.xlabel('Client Index')
+            plt.ylabel('Mean Cos Value')
+            plt.legend()
+
             # 绘制与平均更新余弦相似度MZ-score分布图
-            plt.subplot(4, 2, 8)
+            plt.subplot(3, 3, 8)
             plt.scatter([i for i in benign_indices], [mzscore_mean_cos[i] for i in benign_indices], 
                     label='Benign', color='blue', marker='o', s=30)
             plt.scatter([i for i in malicious_indices], [mzscore_mean_cos[i] for i in malicious_indices], 
@@ -2739,6 +2750,27 @@ class Aggregation():
             plt.xlabel('Client Index')
             plt.ylabel('MZ-score Value')
             plt.legend()
+            
+            # 绘制客户端相似度热力图
+            plt.subplot(3, 3, 9)
+            im = plt.imshow(similarity_matrix, cmap='RdYlBu_r', aspect='auto', vmin=-1, vmax=1)
+            plt.colorbar(im, label='Cosine Similarity')
+            plt.title('Client Similarity Heatmap')
+            plt.xlabel('Client Index')
+            plt.ylabel('Client Index')
+            
+            # 添加客户端类型标注
+            for i in range(num_chosen_clients):
+                for j in range(num_chosen_clients):
+                    if i != j:  # 不在对角线上显示数值
+                        text_color = 'white' if abs(similarity_matrix[i, j]) > 0.5 else 'black'
+                        plt.text(j, i, f'{similarity_matrix[i, j]:.2f}', 
+                                ha='center', va='center', color=text_color, fontsize=8)
+            
+            # 在热力图边缘标注客户端类型
+            client_labels = ['M' if i < len(malicious_id) else 'B' for i in range(num_chosen_clients)]
+            plt.xticks(range(num_chosen_clients), [f'{i}({client_labels[i]})' for i in range(num_chosen_clients)], rotation=45)
+            plt.yticks(range(num_chosen_clients), [f'{i}({client_labels[i]})' for i in range(num_chosen_clients)])
             
             # 添加总标题
             plt.suptitle(f'Round {current_round} - Hybrid Defense Method Analysis', fontsize=16)
