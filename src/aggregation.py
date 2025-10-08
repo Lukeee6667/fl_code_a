@@ -263,16 +263,16 @@ class Aggregation():
         malicious_id = getattr(self.args, 'malicious_id', None)
         
         # 调用正确实现
-        aggregated_update = agg_alignins_fedup_correct(
-            self.args,
+        aggregated_update, pruned_model = agg_alignins_fedup_correct(
             inter_model_updates,
             flat_global_model,
             global_model,
+            self.args,
             malicious_id,
             current_round
         )
         
-        return aggregated_updates
+        return aggregated_update
     
     def _calculate_adaptive_pruning_ratio(self, agent_updates_dict, benign_clients, p_max, p_min, gamma):
         """

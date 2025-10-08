@@ -834,7 +834,15 @@ def setup_logging(args):
     backup_file = ['aggregation.py', 'federated.py', 'agent.py']
 
     for file in backup_file:
-        copyfile('./%s' % file, file_path + file)
+        # 检查文件是否在当前目录，如果不在则在src目录中查找
+        src_path = './%s' % file
+        if not os.path.exists(src_path):
+            src_path = './src/%s' % file
+        
+        if os.path.exists(src_path):
+            copyfile(src_path, file_path + file)
+        else:
+            print(f"Warning: Could not find {file} in current directory or src/ directory")
     
     # Set up file handler for logging
     file_handler = logging.FileHandler(os.path.join(dir_path, f"{fileName}.log"))
