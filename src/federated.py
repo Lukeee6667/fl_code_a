@@ -135,6 +135,7 @@ if __name__ == "__main__":
             "rfa",
             "fedup",
             "alignins_fedup_hybrid",
+            "alignins_fedup_correct",
         ],
         help="aggregation function to aggregate agents' local weights",
     )

@@ -48,6 +48,13 @@ class Aggregation():
             # def agg_alignins_3_metrics_nonidd_badnet(self, agent_updates_dict, flat_global_model):
             # def agg_alignins_g_v2_onepic(self, agent_updates_dict, flat_global_model, current_round=None):
             aggregated_updates = self.agg_alignins(agent_updates_dict, cur_global_params)
+        
+        elif self.args.aggr == 'alignins_fedup_standard':
+            # 新的标准AlignIns+FedUP聚合方法
+            aggregated_updates = self.agg_alignins_fedup_standard(agent_updates_dict, cur_global_params, global_model, current_round)
+        elif self.args.aggr == 'alignins_fedup_correct':
+            # 正确的AlignIns+FedUP实现：先过滤聚合，再对模型权重剪枝
+            aggregated_updates = self.agg_alignins_fedup_correct(agent_updates_dict, cur_global_params, global_model, current_round)
         elif self.args.aggr=='alignins_v':
             aggregated_updates = self.agg_alignins_v(agent_updates_dict, cur_global_params, current_round)
         elif self.args.aggr == 'alignins_g_v':
@@ -238,6 +245,32 @@ class Aggregation():
             # 没有检测到异常，使用标准平均聚合
             logging.info("未检测到异常客户端，使用标准聚合")
             aggregated_updates = self.agg_avg(agent_updates_dict)
+        
+        return aggregated_update
+
+    def agg_alignins_fedup_correct(self, agent_updates_dict, flat_global_model, global_model, current_round=None):
+        """
+        正确的AlignIns + FedUP实现
+        先用AlignIns四指标检测和过滤聚合，再对聚合后的模型进行标准FedUP剪枝
+        """
+        # 导入正确实现
+        from agg_alignins_fedup_correct import agg_alignins_fedup_correct
+        
+        # 转换输入格式
+        inter_model_updates = torch.stack(list(agent_updates_dict.values()))
+        
+        # 获取恶意客户端ID（如果有的话）
+        malicious_id = getattr(self.args, 'malicious_id', None)
+        
+        # 调用正确实现
+        aggregated_update = agg_alignins_fedup_correct(
+            self.args,
+            inter_model_updates,
+            flat_global_model,
+            global_model,
+            malicious_id,
+            current_round
+        )
         
         return aggregated_updates
     
@@ -2614,6 +2647,15 @@ class Aggregation():
         logging.info('Hybrid Method - Suspicious clients (for FedUP): %s' % list(suspicious_set))
         logging.info('Hybrid Method - Clear malicious clients (excluded): %s' % list(clear_malicious_set))
 
+        # 计算客户端相似度矩阵（用于可视化）
+        similarity_matrix = np.zeros((num_chosen_clients, num_chosen_clients))
+        for i in range(num_chosen_clients):
+            for j in range(num_chosen_clients):
+                if i == j:
+                    similarity_matrix[i, j] = 1.0
+                else:
+                    similarity_matrix[i, j] = cos(inter_model_updates[i], inter_model_updates[j]).item()
+
         ######## 添加可视化功能 ########
         import matplotlib.pyplot as plt
         import os
@@ -4245,6 +4287,33 @@ class Aggregation():
         weighted_updates = [update * wv[i] for update, i in zip(agent_updates_dict.values(), range(len(wv)))]
 
         aggregated_model = torch.mean(torch.stack(weighted_updates, dim=0), dim=0)
+        
+        return aggregated_model
+    
+    def agg_alignins_fedup_standard(self, agent_updates_dict, flat_global_model, global_model, current_round=None):
+        """
+        AlignIns + FedUP Standard 聚合方法
+        结合AlignIns多指标异常检测和标准FedUP剪枝
+        """
+        # 导入标准实现
+        from agg_alignins_fedup_standard import agg_alignins_fedup_standard
+        
+        # 转换输入格式
+        inter_model_updates = torch.stack(list(agent_updates_dict.values()))
+        
+        # 获取恶意客户端ID（如果有的话）
+        malicious_id = getattr(self.args, 'malicious_id', None)
+        
+        # 调用标准实现
+        aggregated_update = agg_alignins_fedup_standard(
+            self.args,
+            inter_model_updates,
+            flat_global_model,
+            malicious_id,
+            current_round
+        )
+        
+        return aggregated_update
 
         print(aggregated_model.shape)
 
