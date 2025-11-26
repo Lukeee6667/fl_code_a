@@ -154,6 +154,8 @@ if __name__ == "__main__":
     parser.add_argument("--lambda_g", type=float, default=1.5)
     
     # FedUP相关参数（基于论文）
+    parser.add_argument('--fedup_pruning_ratio', type=float, default=0.1,
+                        help='FedUP基础剪枝比例 (default: 0.1)')
     parser.add_argument('--fedup_p_max', type=float, default=0.15,
                         help='FedUP最大剪枝率 (default: 0.15)')
     parser.add_argument('--fedup_p_min', type=float, default=0.01,
