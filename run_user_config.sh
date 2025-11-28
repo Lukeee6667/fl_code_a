@@ -34,6 +34,9 @@ BS=64                       # 批次大小
 CLIENT_LR=0.1               # 客户端学习率
 SERVER_LR=1                 # 服务器学习率
 ROUNDS=100                  # 通信轮数 (根据数据集自动调整)
+NOT_FINETUNE_ROUNDS=2
+NOT_FINETUNE_LOCAL_EP=1
+NOT_FINETUNE_LR=0.0001
 
 # AlignIns参数
 ALIGNINS_STRICT_THRESHOLD=0.7
@@ -166,6 +169,27 @@ config_compare_hybrid() {
         --server_lr $SERVER_LR
 }
 
+config_not_unlearning() {
+    echo "=== NoT联邦遗忘方法 ==="
+    
+    CUDA_VISIBLE_DEVICES=0,1 python src/federated.py \
+        --poison_frac $POISON_FRAC \
+        --num_corrupt $NUM_CORRUPT \
+        --num_agents $NUM_AGENTS \
+        --aggr "not_unlearning" \
+        --data $DATA \
+        --attack $ATTACK \
+        $NON_IID \
+        --beta $BETA \
+        --local_ep $LOCAL_EP \
+        --bs $BS \
+        --client_lr $CLIENT_LR \
+        --server_lr $SERVER_LR \
+        --not_finetune_rounds $NOT_FINETUNE_ROUNDS \
+        --not_finetune_local_ep $NOT_FINETUNE_LOCAL_EP \
+        --not_finetune_lr $NOT_FINETUNE_LR
+}
+
 # 配置7：自定义参数配置
 config_custom() {
     echo "=== 自定义参数配置 ==="
@@ -207,6 +231,7 @@ show_configs() {
     echo "5. config_cifar100        - CIFAR-100配置"
     echo "6. config_compare_hybrid  - 对比实验 (混合方法)"
     echo "7. config_custom          - 自定义参数配置"
+    echo "8. config_not_unlearning  - NoT联邦遗忘方法"
     echo "=========================================="
     echo "当前GPU配置: CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
     echo "当前聚合方法: $AGGR_METHOD"
@@ -225,7 +250,7 @@ show_configs() {
 interactive_config() {
     show_configs
     echo
-    read -p "请选择配置 (1-7): " choice
+    read -p "请选择配置 (1-8): " choice
     
     case $choice in
         1) config_user_original ;;
@@ -239,7 +264,8 @@ interactive_config() {
             echo "bash run_user_config.sh config_custom [poison_frac] [num_corrupt] [num_agents] [attack]"
             echo "例如: bash run_user_config.sh config_custom 0.4 12 50 DBA"
             ;;
-        *) echo "无效选择，请输入1-7之间的数字" ;;
+        8) config_not_unlearning ;;
+        *) echo "无效选择，请输入1-8之间的数字" ;;
     esac
 }
 

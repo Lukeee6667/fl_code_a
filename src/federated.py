@@ -136,9 +136,13 @@ if __name__ == "__main__":
             "fedup",
             "alignins_fedup_hybrid",
             "alignins_fedup_correct",
+            "not_unlearning",
         ],
         help="aggregation function to aggregate agents' local weights",
     )
+    parser.add_argument("--not_finetune_rounds", type=int, default=0)
+    parser.add_argument("--not_finetune_local_ep", type=int, default=1)
+    parser.add_argument("--not_finetune_lr", type=float, default=1e-4)
     parser.add_argument("--lr_decay", type=float, default=0.99)
     parser.add_argument("--momentum", type=float, default=0.0)
     parser.add_argument("--mask_init", type=str, default="ERK")
@@ -389,6 +393,41 @@ if __name__ == "__main__":
         updates_dict, neurotoxin_mask = aggregator.aggregate_updates(
             global_model, agent_updates_dict, auxiliary_data_loader, rnd
         )
+
+        if args.aggr == "not_unlearning" and args.not_finetune_rounds > 0:
+            orig_lr = args.client_lr
+            orig_local_ep = args.local_ep
+            args.client_lr = args.not_finetune_lr
+            args.local_ep = args.not_finetune_local_ep
+            for _ in range(args.not_finetune_rounds):
+                finetune_updates = {}
+                rnd_params_fine = parameters_to_vector(
+                    [
+                        copy.deepcopy(global_model.state_dict()[name])
+                        for name in global_model.state_dict()
+                    ]
+                )
+                for agent_id in range(0, args.num_agents):
+                    if agents[agent_id].is_malicious:
+                        continue
+                    update = agents[agent_id].local_train(
+                        global_model, criterion, rnd, neurotoxin_mask=neurotoxin_mask
+                    )
+                    finetune_updates[agent_id] = update
+                    utils.vector_to_model(copy.deepcopy(rnd_params_fine), global_model)
+                if len(finetune_updates) > 0:
+                    total_weight = sum(agent_data_sizes[i] for i in finetune_updates.keys())
+                    aggregated_update_fine = torch.zeros_like(rnd_params_fine)
+                    for aid, upd in finetune_updates.items():
+                        aggregated_update_fine += (agent_data_sizes[aid] / total_weight) * upd
+                    cur_params = parameters_to_vector(
+                        [global_model.state_dict()[name] for name in global_model.state_dict()]
+                    )
+                    lr_vec = torch.tensor([args.server_lr] * len(cur_params), device=args.device)
+                    new_params = (cur_params + lr_vec * aggregated_update_fine).float()
+                    utils.vector_to_model(new_params, global_model)
+            args.client_lr = orig_lr
+            args.local_ep = orig_local_ep
 
         # inference in every args.snap rounds
         logging.info("---------Test {} ------------".format(rnd))

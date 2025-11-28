@@ -55,6 +55,8 @@ class Aggregation():
         elif self.args.aggr == 'alignins_fedup_correct':
             # 正确的AlignIns+FedUP实现：先过滤聚合，再对模型权重剪枝
             aggregated_updates = self.agg_alignins_fedup_correct(agent_updates_dict, cur_global_params, global_model, current_round)
+        elif self.args.aggr == 'not_unlearning':
+            aggregated_updates = self.agg_not_unlearning(agent_updates_dict, cur_global_params, global_model, current_round)
         elif self.args.aggr=='alignins_v':
             aggregated_updates = self.agg_alignins_v(agent_updates_dict, cur_global_params, current_round)
         elif self.args.aggr == 'alignins_g_v':
@@ -272,6 +274,20 @@ class Aggregation():
             current_round
         )
         
+        return aggregated_update
+
+    def agg_not_unlearning(self, agent_updates_dict, flat_global_model, global_model, current_round=None):
+        from agg_not_unlearning import agg_not_unlearning
+        inter_model_updates = torch.stack(list(agent_updates_dict.values()))
+        malicious_id = getattr(self.args, 'malicious_id', None)
+        aggregated_update, _ = agg_not_unlearning(
+            inter_model_updates,
+            flat_global_model,
+            global_model,
+            self.args,
+            malicious_id,
+            current_round,
+        )
         return aggregated_update
     
     def _calculate_adaptive_pruning_ratio(self, agent_updates_dict, benign_clients, p_max, p_min, gamma):
