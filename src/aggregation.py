@@ -16,6 +16,8 @@ class Aggregation():
         self.args = args
         self.server_lr = args.server_lr
         self.n_params = n_params
+        # 保存本轮检测到的恶意/可疑客户端，用于后续微调阶段排除
+        self.detected_target_clients = set()
         
         if self.args.aggr == 'foolsgold':
             self.memory_dict = dict()
@@ -280,7 +282,7 @@ class Aggregation():
         from agg_not_unlearning import agg_not_unlearning
         inter_model_updates = torch.stack(list(agent_updates_dict.values()))
         malicious_id = getattr(self.args, 'malicious_id', None)
-        aggregated_update, _ = agg_not_unlearning(
+        aggregated_update, _, detected_targets = agg_not_unlearning(
             inter_model_updates,
             flat_global_model,
             global_model,
@@ -288,6 +290,16 @@ class Aggregation():
             malicious_id,
             current_round,
         )
+        # 更新检测到的目标客户端列表（需要映射回原始客户端ID）
+        # agent_updates_dict.keys() 是原始客户端ID的列表
+        client_ids = list(agent_updates_dict.keys())
+        self.detected_target_clients = set()
+        if detected_targets:
+            for idx in detected_targets:
+                if idx < len(client_ids):
+                    self.detected_target_clients.add(client_ids[idx])
+        
+        logging.info(f"Aggregation: Detected target clients to exclude in finetuning: {self.detected_target_clients}")
         return aggregated_update
     
     def _calculate_adaptive_pruning_ratio(self, agent_updates_dict, benign_clients, p_max, p_min, gamma):

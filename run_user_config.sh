@@ -34,7 +34,7 @@ BS=64                       # 批次大小
 CLIENT_LR=0.1               # 客户端学习率
 SERVER_LR=1                 # 服务器学习率
 ROUNDS=100                  # 通信轮数 (根据数据集自动调整)
-NOT_FINETUNE_ROUNDS=2
+NOT_FINETUNE_ROUNDS=5       # 微调轮数 (改为5轮)
 NOT_FINETUNE_LOCAL_EP=1
 NOT_FINETUNE_LR=0.0001
 

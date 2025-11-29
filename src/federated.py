@@ -394,41 +394,6 @@ if __name__ == "__main__":
             global_model, agent_updates_dict, auxiliary_data_loader, rnd
         )
 
-        if args.aggr == "not_unlearning" and args.not_finetune_rounds > 0:
-            orig_lr = args.client_lr
-            orig_local_ep = args.local_ep
-            args.client_lr = args.not_finetune_lr
-            args.local_ep = args.not_finetune_local_ep
-            for _ in range(args.not_finetune_rounds):
-                finetune_updates = {}
-                rnd_params_fine = parameters_to_vector(
-                    [
-                        copy.deepcopy(global_model.state_dict()[name])
-                        for name in global_model.state_dict()
-                    ]
-                )
-                for agent_id in range(0, args.num_agents):
-                    if agents[agent_id].is_malicious:
-                        continue
-                    update = agents[agent_id].local_train(
-                        global_model, criterion, rnd, neurotoxin_mask=neurotoxin_mask
-                    )
-                    finetune_updates[agent_id] = update
-                    utils.vector_to_model(copy.deepcopy(rnd_params_fine), global_model)
-                if len(finetune_updates) > 0:
-                    total_weight = sum(agent_data_sizes[i] for i in finetune_updates.keys())
-                    aggregated_update_fine = torch.zeros_like(rnd_params_fine)
-                    for aid, upd in finetune_updates.items():
-                        aggregated_update_fine += (agent_data_sizes[aid] / total_weight) * upd
-                    cur_params = parameters_to_vector(
-                        [global_model.state_dict()[name] for name in global_model.state_dict()]
-                    )
-                    lr_vec = torch.tensor([args.server_lr] * len(cur_params), device=args.device)
-                    new_params = (cur_params + lr_vec * aggregated_update_fine).float()
-                    utils.vector_to_model(new_params, global_model)
-            args.client_lr = orig_lr
-            args.local_ep = orig_local_ep
-
         # inference in every args.snap rounds
         logging.info("---------Test {} ------------".format(rnd))
         if rnd % args.snap == 0:
@@ -496,6 +461,117 @@ if __name__ == "__main__":
                 best_bcdr_acc = poison_acc
 
         logging.info("------------------------------".format(rnd))
+
+    # ==========================================
+    # NoT Unlearning Logic (Post-Training)
+    # ==========================================
+    if args.aggr == "not_unlearning":
+        logging.info("NoT Unlearning: Starting one-shot unlearning after training...")
+        
+        # 1. Negate the first conv layer
+        target_name = None
+        # Prioritize finding the first conv layer weights
+        for name, _ in global_model.named_parameters():
+            if ('conv' in name.lower()) and ('weight' in name.lower()):
+                target_name = name
+                break
+        # Fallback to first parameter if no conv weight found
+        if target_name is None:
+            for name, _ in global_model.named_parameters():
+                target_name = name
+                break
+                
+        if target_name:
+            logging.info(f"NoT Unlearning: Negating layer '{target_name}'")
+            for name, param in global_model.named_parameters():
+                if name == target_name:
+                    param.data = -param.data
+                    break
+        else:
+            logging.warning("NoT Unlearning: No suitable layer found for negation!")
+        
+        # 2. Fine-tuning with clean data
+        # Use benign clients (ground truth) for fine-tuning
+        if args.not_finetune_rounds <= 0:
+             args.not_finetune_rounds = 5
+             
+        logging.info(f"NoT Unlearning: Starting fine-tuning for {args.not_finetune_rounds} rounds...")
+        
+        # Backup args
+        orig_lr = args.client_lr
+        orig_local_ep = args.local_ep
+        
+        args.client_lr = args.not_finetune_lr
+        args.local_ep = args.not_finetune_local_ep
+        
+        # Identify benign clients (ground truth)
+        benign_agent_ids = [i for i in range(args.num_agents) if not agents[i].is_malicious]
+        logging.info(f"NoT Unlearning: Fine-tuning using {len(benign_agent_ids)} benign clients")
+        
+        for ft_rnd in range(1, args.not_finetune_rounds + 1):
+            finetune_updates = {}
+            rnd_params_fine = parameters_to_vector(
+                 [copy.deepcopy(global_model.state_dict()[name]) for name in global_model.state_dict()]
+            )
+            
+            # Use all benign agents for fine-tuning
+            for agent_id in benign_agent_ids:
+                update = agents[agent_id].local_train(
+                    global_model, criterion, ft_rnd, neurotoxin_mask=neurotoxin_mask
+                )
+                finetune_updates[agent_id] = update
+                utils.vector_to_model(copy.deepcopy(rnd_params_fine), global_model)
+                
+            # Aggregate updates
+            if len(finetune_updates) > 0:
+                total_weight = sum(agent_data_sizes[i] for i in finetune_updates.keys())
+                aggregated_update_fine = torch.zeros_like(rnd_params_fine)
+                for aid, upd in finetune_updates.items():
+                    aggregated_update_fine += (agent_data_sizes[aid] / total_weight) * upd
+                
+                cur_params = parameters_to_vector(
+                    [global_model.state_dict()[name] for name in global_model.state_dict()]
+                )
+                lr_vec = torch.tensor([args.server_lr] * len(cur_params), device=args.device)
+                new_params = (cur_params + lr_vec * aggregated_update_fine).float()
+                utils.vector_to_model(new_params, global_model)
+            
+            logging.info(f"NoT Unlearning: Fine-tuning round {ft_rnd} completed")
+
+        # Restore args
+        args.client_lr = orig_lr
+        args.local_ep = orig_local_ep
+        
+        # Evaluate after unlearning & fine-tuning
+        logging.info("---------Test After NoT Unlearning ------------")
+        val_acc = utils.get_loss_n_accuracy(
+            global_model, criterion, val_loader, args, args.rounds + args.not_finetune_rounds, args.num_target
+        )
+        asr = utils.get_loss_n_accuracy(
+            global_model,
+            criterion,
+            poisoned_val_loader,
+            args,
+            args.rounds + args.not_finetune_rounds,
+            num_classes=args.num_target,
+        )
+        poison_acc = utils.get_loss_n_accuracy(
+            global_model,
+            criterion,
+            poisoned_val_only_x_loader,
+            args,
+            args.rounds + args.not_finetune_rounds,
+            args.num_target,
+        )
+        logging.info("Post-Unlearning Clean ACC:            %.4f" % val_acc)
+        logging.info("Post-Unlearning Attack Success Ratio: %.4f" % asr)
+        logging.info("Post-Unlearning Backdoor ACC:         %.4f" % poison_acc)
+        
+        # Update best results if improved (optional, but unlearning usually drops performance initially)
+        if val_acc > best_acc:
+             best_acc = val_acc
+             best_asr = asr
+             best_bcdr_acc = poison_acc
 
     logging.info("Best results:")
     logging.info("Clean ACC:              %.4f" % best_acc)
