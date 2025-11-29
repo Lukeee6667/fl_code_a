@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import copy
 
 import torch
@@ -88,7 +89,7 @@ class Aggregation():
                     aggregated_updates = self.agg_alignins_plr(agent_updates_dict, flat_global_model, global_model, data_loader)
                 except Exception as e:
                     import logging
-                    logging.error(f"PLR聚合失败: {str(e)}")
+                    logging.error("PLR聚合失败: " + str(e))
                     logging.warning("回退到平均值聚合")
                     aggregated_updates = self.agg_avg(agent_updates_dict)
             else:
@@ -155,7 +156,7 @@ class Aggregation():
         gamma = getattr(self.args, 'fedup_gamma', 5)     # 曲线陡度参数
         sensitivity_threshold = getattr(self.args, 'fedup_sensitivity_threshold', 0.5)  # 异常检测阈值
         
-        logging.info(f"FedUP聚合 - P_max: {p_max}, P_min: {p_min}, Gamma: {gamma}")
+        logging.info("FedUP聚合 - P_max: %s, P_min: %s, Gamma: %s" % (p_max, p_min, gamma))
         
         # 1. 计算客户端更新的统计信息
         update_magnitudes = {}
@@ -195,7 +196,7 @@ class Aggregation():
             z_score = abs(magnitude - magnitude_mean) / (magnitude_std + 1e-8)
             if z_score > sensitivity_threshold:
                 suspicious_clients.add(client_id)
-                logging.info(f"客户端 {client_id} 被标记为异常 (幅度异常: z_score={z_score:.3f})")
+                logging.info("客户端 %s 被标记为异常 (幅度异常: z_score=%.3f)" % (client_id, z_score))
         
         # 基于方向一致性检测
         similarity_values = list(direction_similarities.values())
@@ -204,7 +205,7 @@ class Aggregation():
         for client_id, similarity in direction_similarities.items():
             if similarity < similarity_threshold:
                 suspicious_clients.add(client_id)
-                logging.info(f"客户端 {client_id} 被标记为异常 (方向异常: similarity={similarity:.3f})")
+                logging.info("客户端 %s 被标记为异常 (方向异常: similarity=%.3f)" % (client_id, similarity))
         
         # 4. 计算自适应剪枝比例（基于论文公式5）
         benign_clients = [cid for cid in agent_updates_dict.keys() if cid not in suspicious_clients]
@@ -219,8 +220,8 @@ class Aggregation():
         
         # 6. 应用遗忘掩码进行聚合
         if len(suspicious_clients) > 0:
-            logging.info(f"应用FedUP遗忘，影响客户端: {suspicious_clients}")
-            logging.info(f"自适应剪枝比例: {adaptive_pruning_ratio:.4f}")
+            logging.info("应用FedUP遗忘，影响客户端: %s" % str(suspicious_clients))
+            logging.info("自适应剪枝比例: %.4f" % adaptive_pruning_ratio)
             # 过滤掉可疑客户端或降低其权重
             filtered_updates = {}
             total_weight = 0

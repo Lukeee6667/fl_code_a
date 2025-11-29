@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import torch
 import copy
 from typing import List, Tuple, Set
@@ -20,7 +21,7 @@ class NoTUnlearningAggregator:
         # ==========================================
         # Standard FedAvg Aggregation
         # ==========================================
-        logging.info(f"NoT Unlearning: Executing standard FedAvg aggregation (Round {current_round})...")
+        logging.info("NoT Unlearning: Executing standard FedAvg aggregation (Round %s)..." % str(current_round))
         
         # Simply average all updates
         final_update = torch.mean(inter_model_updates, dim=0)

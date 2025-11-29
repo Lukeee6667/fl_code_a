@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import utils
 import models
 import math
@@ -482,7 +483,7 @@ if __name__ == "__main__":
                 break
                 
         if target_name:
-            logging.info(f"NoT Unlearning: Negating layer '{target_name}'")
+            logging.info("NoT Unlearning: Negating layer '%s'" % target_name)
             for name, param in global_model.named_parameters():
                 if name == target_name:
                     param.data = -param.data
@@ -495,7 +496,7 @@ if __name__ == "__main__":
         if args.not_finetune_rounds <= 0:
              args.not_finetune_rounds = 5
              
-        logging.info(f"NoT Unlearning: Starting fine-tuning for {args.not_finetune_rounds} rounds...")
+        logging.info("NoT Unlearning: Starting fine-tuning for %d rounds..." % args.not_finetune_rounds)
         
         # Backup args
         orig_lr = args.client_lr
@@ -506,7 +507,7 @@ if __name__ == "__main__":
         
         # Identify benign clients (ground truth)
         benign_agent_ids = [i for i in range(args.num_agents) if not agents[i].is_malicious]
-        logging.info(f"NoT Unlearning: Fine-tuning using {len(benign_agent_ids)} benign clients")
+        logging.info("NoT Unlearning: Fine-tuning using %d benign clients" % len(benign_agent_ids))
         
         for ft_rnd in range(1, args.not_finetune_rounds + 1):
             finetune_updates = {}
@@ -536,7 +537,7 @@ if __name__ == "__main__":
                 new_params = (cur_params + lr_vec * aggregated_update_fine).float()
                 utils.vector_to_model(new_params, global_model)
             
-            logging.info(f"NoT Unlearning: Fine-tuning round {ft_rnd} completed")
+            logging.info("NoT Unlearning: Fine-tuning round %d completed" % ft_rnd)
 
         # Restore args
         args.client_lr = orig_lr
