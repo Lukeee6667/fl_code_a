@@ -190,6 +190,30 @@ config_not_unlearning() {
         --not_finetune_lr $NOT_FINETUNE_LR
 }
 
+# 配置9：IMS防御配置
+config_ims() {
+    echo "=== IMS防御配置 ==="
+    
+    CUDA_VISIBLE_DEVICES=0,1 python src/federated.py \
+        --poison_frac $POISON_FRAC \
+        --num_corrupt $NUM_CORRUPT \
+        --num_agents $NUM_AGENTS \
+        --aggr "ims" \
+        --data $DATA \
+        --attack $ATTACK \
+        $NON_IID \
+        --beta $BETA \
+        --local_ep $LOCAL_EP \
+        --bs $BS \
+        --client_lr $CLIENT_LR \
+        --server_lr $SERVER_LR \
+        --ims_r1 20 \
+        --ims_r2 15 \
+        --ims_r3 5 \
+        --ims_k 20 \
+        --ims_epsilon 1.0
+}
+
 # 配置7：自定义参数配置
 config_custom() {
     echo "=== 自定义参数配置 ==="

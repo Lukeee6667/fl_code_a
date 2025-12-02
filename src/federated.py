@@ -138,6 +138,7 @@ if __name__ == "__main__":
             "alignins_fedup_hybrid",
             "alignins_fedup_correct",
             "not_unlearning",
+            "ims",
         ],
         help="aggregation function to aggregate agents' local weights",
     )
@@ -262,7 +263,7 @@ if __name__ == "__main__":
     #     pin_memory=False
     # )
     auxiliary_data_loader = None
-    if args.aggr == 'alignins_plr':
+    if args.aggr == 'alignins_plr' or args.aggr == 'ims':
         # 先导入prepare_auxiliary_data函数
         from aggregation import Aggregation
         

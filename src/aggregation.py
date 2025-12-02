@@ -58,6 +58,11 @@ class Aggregation():
         elif self.args.aggr == 'alignins_fedup_correct':
             # 正确的AlignIns+FedUP实现：先过滤聚合，再对模型权重剪枝
             aggregated_updates = self.agg_alignins_fedup_correct(agent_updates_dict, cur_global_params, global_model, current_round)
+        elif self.args.aggr == 'ims':
+            # IMS: Intelligent Mask Selection
+            # Ensure auxiliary_data_loader is available
+            data_loader = auxiliary_data_loader if auxiliary_data_loader is not None else self.auxiliary_data_loader
+            aggregated_updates = self.agg_ims(agent_updates_dict, cur_global_params, global_model, data_loader)
         elif self.args.aggr == 'not_unlearning':
             aggregated_updates = self.agg_not_unlearning(agent_updates_dict, cur_global_params, global_model, current_round)
         elif self.args.aggr=='alignins_v':
@@ -277,6 +282,26 @@ class Aggregation():
             current_round
         )
         
+        return aggregated_update
+
+    def agg_ims(self, agent_updates_dict, flat_global_model, global_model, auxiliary_data_loader):
+        """
+        IMS: Intelligent Mask Selection
+        """
+        from agg_ims import agg_ims
+        
+        if auxiliary_data_loader is None:
+            import logging
+            logging.warning("IMS: No auxiliary data loader provided! Falling back to FedAvg.")
+            return self.agg_avg(agent_updates_dict)
+            
+        aggregated_update = agg_ims(
+            agent_updates_dict,
+            flat_global_model,
+            global_model,
+            self.args,
+            auxiliary_data_loader
+        )
         return aggregated_update
 
     def agg_not_unlearning(self, agent_updates_dict, flat_global_model, global_model, current_round=None):
