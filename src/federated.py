@@ -506,37 +506,44 @@ if __name__ == "__main__":
         args.client_lr = args.not_finetune_lr
         args.local_ep = args.not_finetune_local_ep
         
-        # Identify benign clients (ground truth)
-        benign_agent_ids = [i for i in range(args.num_agents) if not agents[i].is_malicious]
-        logging.info("NoT Unlearning: Fine-tuning using %d benign clients" % len(benign_agent_ids))
+        # Use full CIFAR-10 training data for fine-tuning
+        full_train_loader = DataLoader(
+            train_dataset,
+            batch_size=args.bs,
+            shuffle=True,
+            num_workers=args.num_workers,
+            pin_memory=False,
+            drop_last=True
+        )
+        logging.info("NoT Unlearning: Fine-tuning using full CIFAR-10 training dataset.")
+        
+        # Create a dummy agent for fine-tuning with the full dataset
+        # This agent will not have a specific user_group, but will use the full_train_loader
+        dummy_agent = Agent(
+            _id=-1, # Use a dummy ID
+            args=args,
+            train_dataset=train_dataset, # Pass the full dataset
+            user_groups={-1: list(range(len(train_dataset)))}, # Dummy user_group for full dataset
+            backdoor_train_dataset=None # No backdoor data for fine-tuning
+        )
+        dummy_agent.train_loader = full_train_loader # Assign the full train loader
+        dummy_agent.n_data = len(train_dataset) # Update data size
         
         for ft_rnd in range(1, args.not_finetune_rounds + 1):
-            finetune_updates = {}
-            rnd_params_fine = parameters_to_vector(
-                 [copy.deepcopy(global_model.state_dict()[name]) for name in global_model.state_dict()]
+            logging.info("NoT Unlearning: Starting fine-tuning round %d..." % ft_rnd)
+            
+            # Perform local training on the dummy agent with the full dataset
+            update = dummy_agent.local_train(
+                global_model, criterion, ft_rnd, neurotoxin_mask=neurotoxin_mask
             )
             
-            # Use all benign agents for fine-tuning
-            for agent_id in benign_agent_ids:
-                update = agents[agent_id].local_train(
-                    global_model, criterion, ft_rnd, neurotoxin_mask=neurotoxin_mask
-                )
-                finetune_updates[agent_id] = update
-                utils.vector_to_model(copy.deepcopy(rnd_params_fine), global_model)
-                
-            # Aggregate updates
-            if len(finetune_updates) > 0:
-                total_weight = sum(agent_data_sizes[i] for i in finetune_updates.keys())
-                aggregated_update_fine = torch.zeros_like(rnd_params_fine)
-                for aid, upd in finetune_updates.items():
-                    aggregated_update_fine += (agent_data_sizes[aid] / total_weight) * upd
-                
-                cur_params = parameters_to_vector(
-                    [global_model.state_dict()[name] for name in global_model.state_dict()]
-                )
-                lr_vec = torch.tensor([args.server_lr] * len(cur_params), device=args.device)
-                new_params = (cur_params + lr_vec * aggregated_update_fine).float()
-                utils.vector_to_model(new_params, global_model)
+            # Apply the update to the global model
+            cur_params = parameters_to_vector(
+                [global_model.state_dict()[name] for name in global_model.state_dict()]
+            )
+            lr_vec = torch.tensor([args.server_lr] * len(cur_params), device=args.device)
+            new_params = (cur_params + lr_vec * update).float()
+            utils.vector_to_model(new_params, global_model)
             
             logging.info("NoT Unlearning: Fine-tuning round %d completed" % ft_rnd)
 
