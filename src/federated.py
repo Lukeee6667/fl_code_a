@@ -520,7 +520,7 @@ if __name__ == "__main__":
         # Create a dummy agent for fine-tuning with the full dataset
         # This agent will not have a specific user_group, but will use the full_train_loader
         dummy_agent = Agent(
-            id=-1, # Use a dummy ID
+            id=args.num_agents, # Use a safe ID > num_corrupt to behave as benign
             args=args,
             train_dataset=train_dataset, # Pass the full dataset
             data_idxs=list(range(len(train_dataset))), # Dummy user_group for full dataset
@@ -528,6 +528,7 @@ if __name__ == "__main__":
         )
         dummy_agent.train_loader = full_train_loader # Assign the full train loader
         dummy_agent.n_data = len(train_dataset) # Update data size
+        dummy_agent.is_malicious = 0 # Not malicious
         
         for ft_rnd in range(1, args.not_finetune_rounds + 1):
             logging.info("NoT Unlearning: Starting fine-tuning round %d..." % ft_rnd)
