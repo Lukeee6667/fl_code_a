@@ -506,9 +506,13 @@ if __name__ == "__main__":
         args.client_lr = args.not_finetune_lr
         args.local_ep = args.not_finetune_local_ep
         
+        # RELOAD a clean dataset to ensure no poisoning from previous agents affects fine-tuning
+        logging.info("NoT Unlearning: Reloading clean dataset for fine-tuning...")
+        clean_train_dataset, _ = utils.get_datasets(args.data)
+
         # Use full CIFAR-10 training data for fine-tuning
         full_train_loader = DataLoader(
-            train_dataset,
+            clean_train_dataset,
             batch_size=args.bs,
             shuffle=True,
             num_workers=args.num_workers,
@@ -522,12 +526,12 @@ if __name__ == "__main__":
         dummy_agent = Agent(
             id=args.num_agents, # Use a safe ID > num_corrupt to behave as benign
             args=args,
-            train_dataset=train_dataset, # Pass the full dataset
-            data_idxs=list(range(len(train_dataset))), # Dummy user_group for full dataset
+            train_dataset=clean_train_dataset, # Pass the clean dataset
+            data_idxs=list(range(len(clean_train_dataset))), # Dummy user_group for full dataset
             backdoor_train_dataset=None # No backdoor data for fine-tuning
         )
         dummy_agent.train_loader = full_train_loader # Assign the full train loader
-        dummy_agent.n_data = len(train_dataset) # Update data size
+        dummy_agent.n_data = len(clean_train_dataset) # Update data size
         dummy_agent.is_malicious = 0 # Not malicious
         
         for ft_rnd in range(1, args.not_finetune_rounds + 1):
