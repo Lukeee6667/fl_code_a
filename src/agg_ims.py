@@ -73,6 +73,9 @@ class IMSAggregator:
         vector_to_parameters(candidate_params, candidate_model.parameters())
         candidate_model.to(self.device)
         candidate_model.eval() # Initially eval
+        # Disable gradients for candidate_model parameters as we only optimize masks/deltas
+        for param in candidate_model.parameters():
+            param.requires_grad = False
         
         if auxiliary_data_loader is None:
             logging.warning("IMS: No auxiliary data loader provided! Skipping defense.")
@@ -303,10 +306,16 @@ class IMSAggregator:
         delta_list = [] # Store deltas in order
         
         # Fixed inverse mask model
+        # Create a detached copy of the model for inverse mask application
+        # This ensures no graph connections remain between inverse_masked_model and the main model
+        temp_model = copy.deepcopy(model)
+        for param in temp_model.parameters():
+            param.requires_grad = False
+            
         _, a_bar_prime_init = self.compute_mask_and_inverse(A_init, S_init, self.k)
         # Detach masks to avoid graph retention issues in inner loop
         a_bar_prime_init = [m.detach() for m in a_bar_prime_init]
-        inverse_masked_model = self.apply_mask(model, a_bar_prime_init, prunable_layers)
+        inverse_masked_model = self.apply_mask(temp_model, a_bar_prime_init, prunable_layers)
         inverse_masked_model.eval()
         
         for x, y in loader:
