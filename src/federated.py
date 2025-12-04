@@ -171,6 +171,15 @@ if __name__ == "__main__":
     parser.add_argument('--fedup_sensitivity_threshold', type=float, default=0.5,
                         help='FedUP异常检测敏感度阈值 (default: 0.5)')
 
+    # IMS参数
+    parser.add_argument('--ims_lr', type=float, default=1e-2, help='IMS learning rate')
+    parser.add_argument('--ims_r1', type=int, default=20, help='IMS mask initialization rounds')
+    parser.add_argument('--ims_r2', type=int, default=15, help='IMS outer loop rounds')
+    parser.add_argument('--ims_r3', type=int, default=5, help='IMS inner loop rounds')
+    parser.add_argument('--ims_k', type=float, default=20, help='IMS scaling factor')
+    parser.add_argument('--ims_lambda_init', type=float, default=0.0, help='IMS lambda init')
+    parser.add_argument('--ims_lambda_final', type=float, default=10.0, help='IMS lambda final')
+    parser.add_argument('--ims_epsilon', type=float, default=1.0, help='IMS perturbation constraint')
 
     args = parser.parse_args()
 
