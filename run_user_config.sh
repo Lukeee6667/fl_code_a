@@ -256,6 +256,7 @@ show_configs() {
     echo "6. config_compare_hybrid  - 对比实验 (混合方法)"
     echo "7. config_custom          - 自定义参数配置"
     echo "8. config_not_unlearning  - NoT联邦遗忘方法"
+    echo "9. config_ims             - IMS防御配置"
     echo "=========================================="
     echo "当前GPU配置: CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
     echo "当前聚合方法: $AGGR_METHOD"
@@ -274,7 +275,7 @@ show_configs() {
 interactive_config() {
     show_configs
     echo
-    read -p "请选择配置 (1-8): " choice
+    read -p "请选择配置 (1-9): " choice
     
     case $choice in
         1) config_user_original ;;
@@ -289,7 +290,8 @@ interactive_config() {
             echo "例如: bash run_user_config.sh config_custom 0.4 12 50 DBA"
             ;;
         8) config_not_unlearning ;;
-        *) echo "无效选择，请输入1-8之间的数字" ;;
+        9) config_ims ;;
+        *) echo "无效选择，请输入1-9之间的数字" ;;
     esac
 }
 
