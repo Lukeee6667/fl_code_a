@@ -69,7 +69,7 @@ class IMSAggregator:
         # So we should emulate this.
         
         server_lr = self.args.server_lr
-        candidate_params = cur_params + server_lr * avg_update
+        candidate_params = (cur_params + server_lr * avg_update).detach()
         vector_to_parameters(candidate_params, candidate_model.parameters())
         candidate_model.to(self.device)
         candidate_model.eval() # Initially eval
@@ -304,6 +304,8 @@ class IMSAggregator:
         
         # Fixed inverse mask model
         _, a_bar_prime_init = self.compute_mask_and_inverse(A_init, S_init, self.k)
+        # Detach masks to avoid graph retention issues in inner loop
+        a_bar_prime_init = [m.detach() for m in a_bar_prime_init]
         inverse_masked_model = self.apply_mask(model, a_bar_prime_init, prunable_layers)
         inverse_masked_model.eval()
         
