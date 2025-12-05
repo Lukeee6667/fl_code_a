@@ -149,6 +149,10 @@ if __name__ == "__main__":
     parser.add_argument("--momentum", type=float, default=0.0)
     parser.add_argument("--mask_init", type=str, default="ERK")
     parser.add_argument("--wd", type=float, default=1e-4)
+    
+    # IMS Arguments
+    parser.add_argument("--ims_start_round", type=int, default=100, help="Start round for IMS defense")
+    parser.add_argument("--ims_margin", type=float, default=0.5, help="Margin for IMS KL loss")
     parser.add_argument("--same_mask", type=int, default=1)
     parser.add_argument("--cease_poison", type=float, default=100000)
     parser.add_argument("--exp_name_extra", type=str, help="defence name", default="")

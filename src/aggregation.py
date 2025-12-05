@@ -62,7 +62,7 @@ class Aggregation():
             # IMS: Intelligent Mask Selection
             # Ensure auxiliary_data_loader is available
             data_loader = auxiliary_data_loader if auxiliary_data_loader is not None else self.auxiliary_data_loader
-            aggregated_updates = self.agg_ims(agent_updates_dict, cur_global_params, global_model, data_loader)
+            aggregated_updates = self.agg_ims(agent_updates_dict, cur_global_params, global_model, data_loader, current_round=current_round)
         elif self.args.aggr == 'not_unlearning':
             aggregated_updates = self.agg_not_unlearning(agent_updates_dict, cur_global_params, global_model, current_round)
         elif self.args.aggr=='alignins_v':
@@ -284,7 +284,7 @@ class Aggregation():
         
         return aggregated_update
 
-    def agg_ims(self, agent_updates_dict, flat_global_model, global_model, auxiliary_data_loader):
+    def agg_ims(self, agent_updates_dict, flat_global_model, global_model, auxiliary_data_loader, current_round=None):
         """
         IMS: Intelligent Mask Selection
         """
@@ -300,7 +300,8 @@ class Aggregation():
             flat_global_model,
             global_model,
             self.args,
-            auxiliary_data_loader
+            auxiliary_data_loader,
+            current_round=current_round
         )
         return aggregated_update
 

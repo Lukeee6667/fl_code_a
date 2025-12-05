@@ -427,9 +427,20 @@ class IMSAggregator:
         logging.info(f"IMS: Defense deployed. Pruned {len(prunable_layers)} layers.")
         return defended_model
 
-def agg_ims(agent_updates_dict, flat_global_model, global_model, args, auxiliary_data_loader):
-    aggregator = IMSAggregator(args, args.device)
-    return aggregator.aggregate(agent_updates_dict, flat_global_model, global_model, auxiliary_data_loader)
+def agg_ims(agent_updates_dict, flat_global_model, global_model, args, auxiliary_data_loader, current_round=None):
+    # Convert updates dict to tensor
+    inter_model_updates = torch.stack(list(agent_updates_dict.values()))
+    
+    # Call IMSOncePipeline logic
+    update, _, _ = agg_ims_once(
+        inter_model_updates, 
+        flat_global_model, 
+        global_model, 
+        args, 
+        auxiliary_data_loader, 
+        current_round=current_round
+    )
+    return update
 
 class IMSOncePipeline:
     def __init__(self, args):
@@ -441,12 +452,29 @@ class IMSOncePipeline:
             global_model: torch.nn.Module,
             auxiliary_data_loader,
             current_round: int = None) -> Tuple[torch.Tensor, torch.nn.Module, Set[int]]:
+        
+        # Default start round to 100 if not specified
+        start_round = getattr(self.args, 'ims_start_round', 100)
+        
+        # Standard FedAvg for the first 'start_round' rounds
+        if current_round is not None and current_round < start_round:
+            # logging.info(f"IMS: Round {current_round} < {start_round}, performing standard FedAvg.")
+            final_update = torch.mean(inter_model_updates, dim=0)
+            final_model = copy.deepcopy(global_model)
+            final_params = flat_global_model + final_update
+            vector_to_parameters(final_params, final_model.parameters())
+            target_clients: Set[int] = set()
+            return final_update, final_model, target_clients
+
+        logging.info(f"IMS: Round {current_round} >= {start_round}, executing IMS defense.")
         final_update = torch.mean(inter_model_updates, dim=0)
         poisoned_model = copy.deepcopy(global_model)
         final_params = flat_global_model + final_update
         vector_to_parameters(final_params, poisoned_model.parameters())
+        
         ims = IMSAggregator(self.args, self.args.device)
         defended_model = self._defend_once(ims, poisoned_model, auxiliary_data_loader)
+        
         defended_params = parameters_to_vector(defended_model.parameters())
         base_params = flat_global_model
         effective_update = defended_params - base_params
