@@ -22,6 +22,7 @@ import numpy as np
 import copy
 import logging
 from torch.nn.utils import parameters_to_vector, vector_to_parameters
+from typing import List, Tuple, Set
 
 class IMSAggregator:
     def __init__(self, args, device):
@@ -37,6 +38,7 @@ class IMSAggregator:
         self.lambda_init = getattr(args, 'ims_lambda_init', 0.0)
         self.lambda_final = getattr(args, 'ims_lambda_final', 10.0)
         self.epsilon = getattr(args, 'ims_epsilon', 1.0) # Perturbation constraint
+        self.margin = getattr(args, 'ims_margin', 0.5)
         
     def aggregate(self, agent_updates_dict, flat_global_model, global_model, auxiliary_data_loader):
         """
@@ -120,21 +122,15 @@ class IMSAggregator:
         Returns list of (name, module, shape_of_mask)
         """
         layers = []
+        num_classes = getattr(self.args, 'num_target', None)
         for name, module in model.named_modules():
             if isinstance(module, nn.Conv2d):
                 # Prune output channels
                 # Mask shape: (out_channels, 1, 1, 1)
                 layers.append({'name': name, 'module': module, 'type': 'conv', 'shape': (module.out_channels, 1, 1, 1), 'size': module.out_channels})
             elif isinstance(module, nn.Linear):
-                # Prune output features (or input? ims_idea says "embedding dimension")
-                # Usually for ViT embedding dim. 
-                # For standard MLP classifiers, pruning output might change class predictions if it's the last layer.
-                # We should probably skip the final classification layer if NUM_CLASSES matches.
-                # But ims_idea says "NUM_CLASSES = ...".
-                # Let's prune output of Linear layers except maybe the last one?
-                # ims_idea: "ViT-B/16设768" -> this is the embedding dimension.
-                # In ViT, Linear layers are used in MLP blocks.
-                # For simplicity, we prune all Conv2d and Linear layers' output channels.
+                if num_classes is not None and module.out_features == num_classes:
+                    continue
                 layers.append({'name': name, 'module': module, 'type': 'linear', 'shape': (module.out_features, 1), 'size': module.out_features})
         return layers
 
@@ -150,19 +146,13 @@ class IMSAggregator:
             S_list = [torch.zeros_like(a) for a in A_list]
         
         for a, s in zip(A_list, S_list):
-            # term_a = sigmoid(k * (a - 0.5))
             term_a = torch.sigmoid(k * (a - 0.5))
-            # a_prime = term_a * (1 - s) + s
-            a_prime = term_a * (1 - s) + s
-            
-            # term_a_bar = sigmoid(k * ((1 - a) - 0.5))
+            a_prime = term_a * s
             term_a_bar = torch.sigmoid(k * ((1 - a) - 0.5))
-            # a_bar_prime = term_a_bar * (1 - s) + s
-            a_bar_prime = term_a_bar * (1 - s) + s
-            
+            a_bar_prime = term_a_bar * (1 - s)
             a_prime_list.append(a_prime)
             a_bar_prime_list.append(a_bar_prime)
-            
+        
         return a_prime_list, a_bar_prime_list
 
     def apply_mask(self, model, mask_list, prunable_layers):
@@ -195,15 +185,16 @@ class IMSAggregator:
             
         return masked_model
 
+    def _kl_div(self, p, q):
+        eps = 1e-8
+        return torch.mean(torch.sum(p * (torch.log(p + eps) - torch.log(q + eps)), dim=1))
+
     def compute_agree_loss(self, q_hat, q):
-        dot_product = torch.sum(q_hat * q, dim=1)
-        loss = torch.mean(-torch.log(dot_product + 1e-8))
-        return loss
+        return self._kl_div(q, q_hat)
 
     def compute_disagree_loss(self, q_hat, q):
-        dot_product = torch.sum(q_hat * q, dim=1)
-        loss = torch.mean(-torch.log(1 - dot_product + 1e-8))
-        return loss
+        kl = self._kl_div(q, q_hat)
+        return torch.clamp(self.margin - kl, min=0.0)
 
     def mask_initialization(self, loader, model, prunable_layers):
         # Initialize A and S
@@ -440,3 +431,51 @@ def agg_ims(agent_updates_dict, flat_global_model, global_model, args, auxiliary
     aggregator = IMSAggregator(args, args.device)
     return aggregator.aggregate(agent_updates_dict, flat_global_model, global_model, auxiliary_data_loader)
 
+class IMSOncePipeline:
+    def __init__(self, args):
+        self.args = args
+
+    def run(self,
+            inter_model_updates: torch.Tensor,
+            flat_global_model: torch.Tensor,
+            global_model: torch.nn.Module,
+            auxiliary_data_loader,
+            current_round: int = None) -> Tuple[torch.Tensor, torch.nn.Module, Set[int]]:
+        final_update = torch.mean(inter_model_updates, dim=0)
+        poisoned_model = copy.deepcopy(global_model)
+        final_params = flat_global_model + final_update
+        vector_to_parameters(final_params, poisoned_model.parameters())
+        ims = IMSAggregator(self.args, self.args.device)
+        defended_model = self._defend_once(ims, poisoned_model, auxiliary_data_loader)
+        defended_params = parameters_to_vector(defended_model.parameters())
+        base_params = flat_global_model
+        effective_update = defended_params - base_params
+        target_clients: Set[int] = set()
+        return effective_update, defended_model, target_clients
+
+    def _defend_once(self,
+                     ims: IMSAggregator,
+                     candidate_model: torch.nn.Module,
+                     auxiliary_data_loader) -> torch.nn.Module:
+        prunable_layers = ims._get_prunable_layers(candidate_model)
+        A_init, S_init = ims.mask_initialization(auxiliary_data_loader, candidate_model, prunable_layers)
+        delta_dict = ims.inner_subproblem(auxiliary_data_loader, candidate_model, A_init, S_init, prunable_layers)
+        A_final, S_final = ims.outer_subproblem(auxiliary_data_loader, candidate_model, delta_dict, A_init, S_init, prunable_layers)
+        defended_model = ims.deploy_defense(candidate_model, A_final, S_final, prunable_layers)
+        return defended_model
+
+def agg_ims_once(inter_model_updates: torch.Tensor,
+                 flat_global_model: torch.Tensor,
+                 global_model: torch.nn.Module,
+                 args,
+                 auxiliary_data_loader,
+                 malicious_id: List[int] = None,
+                 current_round: int = None) -> Tuple[torch.Tensor, torch.nn.Module, Set[int]]:
+    pipeline = IMSOncePipeline(args)
+    return pipeline.run(
+        inter_model_updates,
+        flat_global_model,
+        global_model,
+        auxiliary_data_loader,
+        current_round,
+    )
