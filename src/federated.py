@@ -138,6 +138,7 @@ if __name__ == "__main__":
             "alignins_fedup_hybrid",
             "alignins_fedup_correct",
             "not_unlearning",
+            "alignins_not_unlearning",
             "ims",
         ],
         help="aggregation function to aggregate agents' local weights",
