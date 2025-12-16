@@ -214,6 +214,52 @@ config_ims() {
         --ims_epsilon 1.0
 }
 
+# 配置10：AlignIns + NoT Unlearning
+config_alignins_not_unlearning() {
+    echo "=== AlignIns + NoT Unlearning ==="
+    
+    CUDA_VISIBLE_DEVICES=0,1 python src/federated.py \
+        --poison_frac $POISON_FRAC \
+        --num_corrupt $NUM_CORRUPT \
+        --num_agents $NUM_AGENTS \
+        --aggr "alignins_not_unlearning" \
+        --data $DATA \
+        --attack $ATTACK \
+        $NON_IID \
+        --beta $BETA \
+        --local_ep $LOCAL_EP \
+        --bs $BS \
+        --client_lr $CLIENT_LR \
+        --server_lr $SERVER_LR \
+        --not_finetune_rounds $NOT_FINETUNE_ROUNDS \
+        --not_finetune_local_ep $NOT_FINETUNE_LOCAL_EP \
+        --not_finetune_lr $NOT_FINETUNE_LR
+}
+
+# 配置11：AlignIns + IMS
+config_alignins_ims() {
+    echo "=== AlignIns + IMS ==="
+    
+    CUDA_VISIBLE_DEVICES=0,1 python src/federated.py \
+        --poison_frac $POISON_FRAC \
+        --num_corrupt $NUM_CORRUPT \
+        --num_agents $NUM_AGENTS \
+        --aggr "alignins_ims" \
+        --data $DATA \
+        --attack $ATTACK \
+        $NON_IID \
+        --beta $BETA \
+        --local_ep $LOCAL_EP \
+        --bs $BS \
+        --client_lr $CLIENT_LR \
+        --server_lr $SERVER_LR \
+        --ims_r1 20 \
+        --ims_r2 15 \
+        --ims_r3 5 \
+        --ims_k 20 \
+        --ims_epsilon 1.0
+}
+
 # 配置7：自定义参数配置
 config_custom() {
     echo "=== 自定义参数配置 ==="
@@ -257,6 +303,8 @@ show_configs() {
     echo "7. config_custom          - 自定义参数配置"
     echo "8. config_not_unlearning  - NoT联邦遗忘方法"
     echo "9. config_ims             - IMS防御配置"
+    echo "10. config_alignins_not_unlearning - AlignIns + NoT Unlearning"
+    echo "11. config_alignins_ims   - AlignIns + IMS"
     echo "=========================================="
     echo "当前GPU配置: CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
     echo "当前聚合方法: $AGGR_METHOD"
@@ -275,7 +323,7 @@ show_configs() {
 interactive_config() {
     show_configs
     echo
-    read -p "请选择配置 (1-9): " choice
+    read -p "请选择配置 (1-11): " choice
     
     case $choice in
         1) config_user_original ;;
@@ -291,7 +339,9 @@ interactive_config() {
             ;;
         8) config_not_unlearning ;;
         9) config_ims ;;
-        *) echo "无效选择，请输入1-9之间的数字" ;;
+        10) config_alignins_not_unlearning ;;
+        11) config_alignins_ims ;;
+        *) echo "无效选择，请输入1-11之间的数字" ;;
     esac
 }
 

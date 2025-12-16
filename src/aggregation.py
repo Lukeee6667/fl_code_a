@@ -42,7 +42,7 @@ class Aggregation():
         if self.args.aggr=='avg' or self.args.aggr == 'rlr' or self.args.aggr == 'lockdown':          
             aggregated_updates = self.agg_avg(agent_updates_dict)
 
-        elif self.args.aggr == 'alignins':
+        elif self.args.aggr == 'alignins' or self.args.aggr == 'alignins_not_unlearning':
             #agg_alignins_layer_lsd
             #agg_alignins_g_v
             #agg_alignins_plr
@@ -52,6 +52,15 @@ class Aggregation():
             # def agg_alignins_g_v2_onepic(self, agent_updates_dict, flat_global_model, current_round=None):
             aggregated_updates = self.agg_alignins(agent_updates_dict, cur_global_params)
         
+        elif self.args.aggr == 'alignins_ims':
+            # AlignIns + IMS: First use AlignIns to get initial update, then refine with IMS
+            # 1. Get AlignIns update
+            alignins_update = self.agg_alignins(agent_updates_dict, cur_global_params)
+            
+            # 2. Use it as initial_update for IMS
+            data_loader = auxiliary_data_loader if auxiliary_data_loader is not None else self.auxiliary_data_loader
+            aggregated_updates = self.agg_ims(agent_updates_dict, cur_global_params, global_model, data_loader, current_round=current_round, initial_update=alignins_update)
+
         elif self.args.aggr == 'alignins_fedup_standard':
             # 新的标准AlignIns+FedUP聚合方法
             aggregated_updates = self.agg_alignins_fedup_standard(agent_updates_dict, cur_global_params, global_model, current_round)

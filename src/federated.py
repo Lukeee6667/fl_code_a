@@ -276,7 +276,7 @@ if __name__ == "__main__":
     #     pin_memory=False
     # )
     auxiliary_data_loader = None
-    if args.aggr == 'alignins_plr' or args.aggr == 'ims':
+    if args.aggr == 'alignins_plr' or args.aggr == 'ims' or args.aggr == 'alignins_ims':
         # 先导入prepare_auxiliary_data函数
         from aggregation import Aggregation
         
@@ -480,7 +480,7 @@ if __name__ == "__main__":
     # ==========================================
     # NoT Unlearning Logic (Post-Training)
     # ==========================================
-    if args.aggr == "not_unlearning":
+    if args.aggr == "not_unlearning" or args.aggr == "alignins_not_unlearning":
         logging.info("NoT Unlearning: Starting one-shot unlearning after training...")
         
         # 1. Negate the first conv layer

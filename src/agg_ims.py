@@ -427,7 +427,7 @@ class IMSAggregator:
         logging.info(f"IMS: Defense deployed. Pruned {len(prunable_layers)} layers.")
         return defended_model
 
-def agg_ims(agent_updates_dict, flat_global_model, global_model, args, auxiliary_data_loader, current_round=None):
+def agg_ims(agent_updates_dict, flat_global_model, global_model, args, auxiliary_data_loader, current_round=None, initial_update=None):
     # Convert updates dict to tensor
     inter_model_updates = torch.stack(list(agent_updates_dict.values()))
     
@@ -438,7 +438,8 @@ def agg_ims(agent_updates_dict, flat_global_model, global_model, args, auxiliary
         global_model, 
         args, 
         auxiliary_data_loader, 
-        current_round=current_round
+        current_round=current_round,
+        initial_update=initial_update
     )
     return update
 
@@ -451,15 +452,21 @@ class IMSOncePipeline:
             flat_global_model: torch.Tensor,
             global_model: torch.nn.Module,
             auxiliary_data_loader,
-            current_round: int = None) -> Tuple[torch.Tensor, torch.nn.Module, Set[int]]:
+            current_round: int = None,
+            initial_update: torch.Tensor = None) -> Tuple[torch.Tensor, torch.nn.Module, Set[int]]:
         
         # Default start round to 100 if not specified
         start_round = getattr(self.args, 'ims_start_round', 100)
         
-        # Standard FedAvg for the first 'start_round' rounds
+        # Determine the base update to use
+        if initial_update is not None:
+            final_update = initial_update
+        else:
+            final_update = torch.mean(inter_model_updates, dim=0)
+
+        # Standard FedAvg (or initial_update) for the first 'start_round' rounds
         if current_round is not None and current_round < start_round:
             # logging.info(f"IMS: Round {current_round} < {start_round}, performing standard FedAvg.")
-            final_update = torch.mean(inter_model_updates, dim=0)
             final_model = copy.deepcopy(global_model)
             final_params = flat_global_model + final_update
             vector_to_parameters(final_params, final_model.parameters())
@@ -467,7 +474,6 @@ class IMSOncePipeline:
             return final_update, final_model, target_clients
 
         logging.info(f"IMS: Round {current_round} >= {start_round}, executing IMS defense.")
-        final_update = torch.mean(inter_model_updates, dim=0)
         poisoned_model = copy.deepcopy(global_model)
         final_params = flat_global_model + final_update
         vector_to_parameters(final_params, poisoned_model.parameters())
@@ -498,7 +504,8 @@ def agg_ims_once(inter_model_updates: torch.Tensor,
                  args,
                  auxiliary_data_loader,
                  malicious_id: List[int] = None,
-                 current_round: int = None) -> Tuple[torch.Tensor, torch.nn.Module, Set[int]]:
+                 current_round: int = None,
+                 initial_update: torch.Tensor = None) -> Tuple[torch.Tensor, torch.nn.Module, Set[int]]:
     pipeline = IMSOncePipeline(args)
     return pipeline.run(
         inter_model_updates,
@@ -506,4 +513,5 @@ def agg_ims_once(inter_model_updates: torch.Tensor,
         global_model,
         auxiliary_data_loader,
         current_round,
+        initial_update=initial_update
     )
