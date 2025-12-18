@@ -40,7 +40,7 @@ class IMSAggregator:
         self.epsilon = getattr(args, 'ims_epsilon', 1.0) # Perturbation constraint
         self.margin = getattr(args, 'ims_margin', 0.5)
         
-    def aggregate(self, agent_updates_dict, flat_global_model, global_model, auxiliary_data_loader):
+    def aggregate(self, agent_updates_dict, flat_global_model, global_model, auxiliary_data_loader, initial_update=None, current_round=None):
         """
         IMS Aggregation Logic
         """
@@ -56,7 +56,12 @@ class IMSAggregator:
             return torch.zeros_like(flat_global_model)
             
         # Average updates
-        avg_update = torch.stack(list(agent_updates_dict.values())).mean(dim=0)
+        if initial_update is not None:
+             avg_update = initial_update
+             logging.info("IMS: Using provided initial_update (e.g. from AlignIns).")
+        else:
+             avg_update = torch.stack(list(agent_updates_dict.values())).mean(dim=0)
+             logging.info("IMS: Using standard FedAvg as initial update.")
         
         # Create a temporary model with the aggregated parameters
         # new_params = old_params + server_lr * avg_update
