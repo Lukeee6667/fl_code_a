@@ -9,7 +9,7 @@ from utils import vector_to_model, vector_to_name_param
 
 import sklearn.metrics.pairwise as smp
 from geom_median.torch import compute_geometric_median 
-
+from agg_a4fl import A4FL_Aggregator
 
 class Aggregation():
     def __init__(self, agent_data_sizes, n_params, args):
@@ -51,6 +51,13 @@ class Aggregation():
             # def agg_alignins_3_metrics_nonidd_badnet(self, agent_updates_dict, flat_global_model):
             # def agg_alignins_g_v2_onepic(self, agent_updates_dict, flat_global_model, current_round=None):
             aggregated_updates = self.agg_alignins(agent_updates_dict, cur_global_params)
+
+        elif self.args.aggr == 'a4fl':
+            aggregator = A4FL_Aggregator(self.args)
+            data_loader = auxiliary_data_loader if auxiliary_data_loader is not None else self.auxiliary_data_loader
+            if data_loader is None:
+                logging.warning("A4FL: No auxiliary data loader provided! Statistical test may fail.")
+            aggregated_updates = aggregator.aggregate(agent_updates_dict, global_model, data_loader)
         
         elif self.args.aggr == 'alignins_ims':
             # AlignIns + IMS: First use AlignIns to get initial update, then refine with IMS
@@ -293,7 +300,7 @@ class Aggregation():
         
         return aggregated_update
 
-    def agg_ims(self, agent_updates_dict, flat_global_model, global_model, auxiliary_data_loader, current_round=None):
+    def agg_ims(self, agent_updates_dict, flat_global_model, global_model, auxiliary_data_loader, current_round=None, initial_update=None):
         """
         IMS: Intelligent Mask Selection
         """
@@ -310,7 +317,8 @@ class Aggregation():
             global_model,
             self.args,
             auxiliary_data_loader,
-            current_round=current_round
+            current_round=current_round,
+            initial_update=initial_update
         )
         return aggregated_update
 

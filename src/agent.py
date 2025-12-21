@@ -5,6 +5,7 @@ import torch
 import utils
 from torch.nn.utils import parameters_to_vector
 from torch.utils.data import DataLoader
+from a4fl_core import A4FL_Core
 
 class Agent():
     def __init__(self, id, args, train_dataset=None, data_idxs=None, mask=None, backdoor_train_dataset=None):
@@ -44,9 +45,12 @@ class Agent():
             self.train_loader = DataLoader(self.train_dataset, batch_size=self.args.bs, shuffle=True, \
                                            num_workers=self.args.num_workers, pin_memory=False, drop_last=True)
 
-    def local_train(self, global_model, criterion, round=None, neurotoxin_mask=None):
+    def local_train(self, global_model, criterion, round=None, neurotoxin_mask=None, bypass_a4fl=False):
         # print(len(self.train_dataset))
         """ Do a local training over the received global model, return the update """
+        if self.args.aggr == 'a4fl' and not bypass_a4fl:
+            return self.local_train_a4fl(global_model, criterion, round)
+
         # start = time.time()
         initial_global_model_params = parameters_to_vector(
             [global_model.state_dict()[name] for name in global_model.state_dict()]).detach()
@@ -107,5 +111,35 @@ class Agent():
             after_train = parameters_to_vector(
                 [global_model.state_dict()[name] for name in global_model.state_dict()]).detach()
             self.update = after_train - initial_global_model_params
-
             return self.update
+
+    def local_train_a4fl(self, global_model, criterion, round=None):
+        # A4FL Defense Training Logic
+        
+        if self.id < self.args.num_corrupt:
+            # Malicious client: Use standard local_train (which has attack logic)
+            return self.local_train(global_model, criterion, round, neurotoxin_mask=None, bypass_a4fl=True)
+            
+        initial_global_model_params = parameters_to_vector(
+            [global_model.state_dict()[name] for name in global_model.state_dict()]).detach()
+            
+        core = A4FL_Core(self.args, self.args.device)
+        
+        # 1. Create Samples
+        combined_loader = core.create_training_samples(self.train_loader, global_model)
+        
+        # 2. Generate UAP
+        UAP = core.generate_UAP(global_model, self.train_loader)
+        
+        # 3. Adversarial Training
+        model = copy.deepcopy(global_model)
+        model = core.adversarial_training(model, combined_loader, UAP, epochs=self.args.local_ep)
+        
+        # 4. Pruning + Fine-tuning
+        model = core.prune_and_finetune(model, combined_loader, threshold=0.1, epochs=self.args.local_ep)
+        
+        # Calculate update
+        final_params = parameters_to_vector([model.state_dict()[name] for name in model.state_dict()]).detach()
+        self.update = final_params - initial_global_model_params
+        
+        return self.update
