@@ -141,6 +141,7 @@ if __name__ == "__main__":
             "alignins_not_unlearning",
             "alignins_ims",
             "ims",
+            "a4fl",
         ],
         help="aggregation function to aggregate agents' local weights",
     )
