@@ -16,9 +16,17 @@ class A4FL_Core:
 
     def add_trigger(self, image, pattern_type='plus', similar=False):
         # Helper to add trigger manually, supporting 'similar' variation
+        # Image shape: (C, H, W)
         x = np.array(image.cpu().numpy().squeeze())
-        # Basic implementation for CIFAR10/Plus pattern
-        # This duplicates logic from utils.add_pattern_bd but allows modification
+        # If squeeze removed channel dim (e.g. grayscale), handle it. 
+        # But here assuming CIFAR (3, 32, 32).
+        
+        # Check shape format. Usually it's (C, H, W) for PyTorch tensors.
+        # But numpy indexing x[i, j][d] suggests (H, W, C)?
+        # The error "IndexError: index 5 is out of bounds for axis 0 with size 3"
+        # suggests x is (3, 32, 32) (C, H, W) but code accesses x[i, start_idx] where i is > 3.
+        # So x is indeed (C, H, W).
+        # We need to access x[d, i, start_idx] instead of x[i, start_idx][d]
         
         if pattern_type == 'plus':
             start_idx = 5
@@ -32,15 +40,16 @@ class A4FL_Core:
                 # Vertical
                 for i in range(start_idx, min(start_idx + size + 1, 32)):
                     if d == 2:
-                        x[i, start_idx][d] = 0
+                        # x[channel, row, col]
+                        x[d, i, start_idx] = 0
                     else:
-                        x[i, start_idx][d] = 255
+                        x[d, i, start_idx] = 255
                 # Horizontal
                 for i in range(start_idx - size // 2, min(start_idx + size // 2 + 1, 32)):
                     if d == 2:
-                        x[start_idx + size // 2, i][d] = 0
+                        x[d, start_idx + size // 2, i] = 0
                     else:
-                        x[start_idx + size // 2, i][d] = 255
+                        x[d, start_idx + size // 2, i] = 255
                         
         return torch.tensor(x).unsqueeze(0)
 
