@@ -61,7 +61,7 @@ class A4FL_Aggregator:
         # Global Aggregation
         if len(legitimate_updates) == 0:
             logging.warning("A4FL: No legitimate updates found! Returning zero update.")
-            return torch.zeros_like(initial_params)
+            return torch.zeros_like(initial_params), []
             
         accumulated_update = torch.zeros_like(initial_params)
         for n_samples, update in legitimate_updates:
@@ -69,7 +69,7 @@ class A4FL_Aggregator:
             
         aggregated_update = accumulated_update / total_samples
         
-        return aggregated_update
+        return aggregated_update, []
 
     def _simple_avg(self, agent_updates_dict):
         total_n = sum([val[0] for val in agent_updates_dict.values()])
@@ -79,4 +79,4 @@ class A4FL_Aggregator:
                 accumulated_update = update * n_samples
             else:
                 accumulated_update += update * n_samples
-        return accumulated_update / total_n
+        return accumulated_update / total_n, []
