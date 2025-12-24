@@ -511,6 +511,9 @@ def vector_to_name_param(vec, name_param_map):
         # The length of the parameter
         num_param = name_param_map[name].numel()
         # Slice the vector, reshape it, and replace the old data of the parameter
+        if isinstance(vec, tuple):
+             vec = vec[0]
+        
         name_param_map[name].data = vec[pointer:pointer + num_param].view_as(name_param_map[name]).data
         # Increment the pointer
         pointer += num_param

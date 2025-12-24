@@ -132,6 +132,15 @@ class Aggregation():
         elif self.args.aggr == "alignins_fedup_hybrid":
             aggregated_updates = self.agg_alignins_fedup_hybrid(agent_updates_dict, cur_global_params, global_model, current_round)
         neurotoxin_mask = {}
+        # A4FL 已经返回了 update, None
+        if self.args.aggr == 'a4fl':
+             # 确保 aggregated_updates 已经是 vector
+             if isinstance(aggregated_updates, tuple):
+                 aggregated_updates = aggregated_updates[0]
+             # A4FL 返回的已经是更新向量，不需要再转换，但为了兼容后续逻辑，我们重建 updates_dict
+             # 注意：vector_to_name_param 需要 aggregated_updates 是 tensor
+             pass
+        
         updates_dict = vector_to_name_param(aggregated_updates, copy.deepcopy(global_model.state_dict()))
         for name in updates_dict:
             updates = updates_dict[name].abs().view(-1)
