@@ -227,23 +227,41 @@ class A4FL_Core:
                 
         return model
 
-    def statistical_test(self, local_model, global_model, clean_test_loader, threshold=0.05):
-        # Metrics: Min, Max, Var, Cos Sim, Eucl Dist
+    def statistical_test(self, local_model, global_model, clean_test_loader):
+        # Metrics: Min, Max, Var, Cos Sim, Eucl Dist, Loss, Acc
         local_model.eval()
         global_model.eval()
         
         local_preds = []
         global_preds = []
         
+        total_loss = 0.0
+        correct = 0
+        total = 0
+        
         with torch.no_grad():
-            for inputs, _ in clean_test_loader:
-                inputs = inputs.to(self.device)
-                local_out = torch.softmax(local_model(inputs), dim=1)
-                global_out = torch.softmax(global_model(inputs), dim=1)
+            for inputs, labels in clean_test_loader:
+                inputs, labels = inputs.to(self.device), labels.to(self.device)
+                
+                local_logits = local_model(inputs)
+                global_logits = global_model(inputs)
+                
+                local_out = torch.softmax(local_logits, dim=1)
+                global_out = torch.softmax(global_logits, dim=1)
                 
                 local_preds.append(local_out)
                 global_preds.append(global_out)
-                break # Only use one batch for efficiency
+                
+                # Loss and Acc for local model
+                loss = self.loss_fn(local_logits, labels)
+                total_loss += loss.item() * inputs.size(0)
+                _, predicted = torch.max(local_logits.data, 1)
+                total += labels.size(0)
+                correct += (predicted == labels).sum().item()
+                
+                # Use limited batches for efficiency if dataset is large
+                if total >= 200: 
+                    break 
         
         local_preds = torch.cat(local_preds)
         global_preds = torch.cat(global_preds)
@@ -256,16 +274,15 @@ class A4FL_Core:
         
         eucl_dist = torch.mean(torch.norm(local_preds - global_preds, dim=1)).item()
         
-        # Simple heuristic thresholds (as per pseudocode logic)
-        # Pseudocode: if (metrics["var"] > 0.5) or (metrics["cos_sim"] < 0.7) or (metrics["eucl_dist"] > 1.0): return False
-        # Adjusting thresholds for real values
-        # Var of softmax is small (max 0.25). 0.5 is huge. Maybe they meant variance of logits?
-        # I'll stick to the logic but maybe loosen thresholds if needed.
-        # Let's assume the pseudocode thresholds are indicative.
+        avg_loss = total_loss / total if total > 0 else 100.0
+        acc = correct / total if total > 0 else 0.0
         
-        is_legit = True
-        if var > 0.5: is_legit = False
-        if cos_sim < 0.7: is_legit = False
-        if eucl_dist > 1.0: is_legit = False
+        metrics = {
+            "var": var,
+            "cos_sim": cos_sim,
+            "eucl_dist": eucl_dist,
+            "loss": avg_loss,
+            "acc": acc
+        }
         
-        return is_legit
+        return metrics
