@@ -72,7 +72,7 @@ class A4FL_Aggregator:
             
         aggregated_update = accumulated_update / total_samples
         
-        return aggregated_update
+        return aggregated_update, None
 
     def _simple_avg(self, agent_updates_dict, agent_data_sizes):
         total_n = sum(agent_data_sizes.values())
@@ -83,4 +83,4 @@ class A4FL_Aggregator:
                 accumulated_update = update * n_samples
             else:
                 accumulated_update += update * n_samples
-        return accumulated_update / total_n
+        return accumulated_update / total_n, None
