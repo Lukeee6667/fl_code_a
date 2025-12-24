@@ -11,14 +11,15 @@ class A4FL_Aggregator:
         self.device = args.device if hasattr(args, 'device') else torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.a4fl_core = A4FL_Core(args, self.device)
 
-    def aggregate(self, agent_updates_dict, global_model, auxiliary_loader):
+    def aggregate(self, agent_updates_dict, global_model, auxiliary_loader, agent_data_sizes):
         """
         Implementation of A4FL Aggregation Logic.
         
         Args:
-            agent_updates_dict: Dictionary {agent_id: (n_samples, update_vector)}
+            agent_updates_dict: Dictionary {agent_id: update_vector}
             global_model: The current global model
             auxiliary_loader: DataLoader containing clean samples on server
+            agent_data_sizes: Dictionary {agent_id: n_samples}
         
         Returns:
             aggregated_update: The weighted average of legitimate updates
@@ -27,7 +28,7 @@ class A4FL_Aggregator:
         
         if auxiliary_loader is None:
             logging.error("A4FL: Auxiliary loader is None! Cannot perform statistical test.")
-            return self._simple_avg(agent_updates_dict)
+            return self._simple_avg(agent_updates_dict, agent_data_sizes)
 
         # Statistical Filtering
         legitimate_updates = []
@@ -39,7 +40,9 @@ class A4FL_Aggregator:
         # We use a temp model to load client parameters for testing
         temp_model = copy.deepcopy(global_model)
         
-        for agent_id, (n_samples, update) in agent_updates_dict.items():
+        for agent_id, update in agent_updates_dict.items():
+            n_samples = agent_data_sizes[agent_id]
+            
             # Reconstruct local model parameters
             local_params = initial_params + update
             
@@ -61,7 +64,7 @@ class A4FL_Aggregator:
         # Global Aggregation
         if len(legitimate_updates) == 0:
             logging.warning("A4FL: No legitimate updates found! Returning zero update.")
-            return torch.zeros_like(initial_params), []
+            return torch.zeros_like(initial_params)
             
         accumulated_update = torch.zeros_like(initial_params)
         for n_samples, update in legitimate_updates:
@@ -69,14 +72,15 @@ class A4FL_Aggregator:
             
         aggregated_update = accumulated_update / total_samples
         
-        return aggregated_update, []
+        return aggregated_update
 
-    def _simple_avg(self, agent_updates_dict):
-        total_n = sum([val[0] for val in agent_updates_dict.values()])
+    def _simple_avg(self, agent_updates_dict, agent_data_sizes):
+        total_n = sum(agent_data_sizes.values())
         accumulated_update = None
-        for agent_id, (n_samples, update) in agent_updates_dict.items():
+        for agent_id, update in agent_updates_dict.items():
+            n_samples = agent_data_sizes[agent_id]
             if accumulated_update is None:
                 accumulated_update = update * n_samples
             else:
                 accumulated_update += update * n_samples
-        return accumulated_update / total_n, []
+        return accumulated_update / total_n

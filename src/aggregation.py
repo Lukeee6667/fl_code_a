@@ -57,7 +57,7 @@ class Aggregation():
             data_loader = auxiliary_data_loader if auxiliary_data_loader is not None else self.auxiliary_data_loader
             if data_loader is None:
                 logging.warning("A4FL: No auxiliary data loader provided! Statistical test may fail.")
-            aggregated_updates = aggregator.aggregate(agent_updates_dict, global_model, data_loader)
+            aggregated_updates = aggregator.aggregate(agent_updates_dict, global_model, data_loader, self.agent_data_sizes)
         
         elif self.args.aggr == 'alignins_ims':
             # AlignIns + IMS: First use AlignIns to get initial update, then refine with IMS
