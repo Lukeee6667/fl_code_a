@@ -41,7 +41,7 @@ class A4FL_Aggregator:
             local_params = initial_params + update
             
             # Load into temp model
-            utils.vector_to_model_wo_load(local_params, temp_model)
+            utils.vector_to_model(local_params, temp_model)
             
             # Perform Statistical Test
             metrics = self.a4fl_core.statistical_test(temp_model, global_model, auxiliary_loader)

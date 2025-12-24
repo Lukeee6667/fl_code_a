@@ -343,7 +343,7 @@ show_configs() {
 interactive_config() {
     show_configs
     echo
-    read -p "请选择配置 (1-11): " choice
+    read -p "请选择配置 (1-12): " choice
     
     case $choice in
         1) config_user_original ;;
