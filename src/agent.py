@@ -38,6 +38,7 @@ class Agent():
                                        num_workers=args.num_workers, pin_memory=False, drop_last=True)
         # size of local dataset
         self.n_data = len(self.train_dataset)
+        self.uap = None # Initialize UAP for A4FL feedback loop
 
     def check_poison_timing(self, round):
         if round > self.args.cease_poison:
@@ -128,15 +129,17 @@ class Agent():
         # 1. Create Samples
         combined_loader = core.create_training_samples(self.train_loader, global_model)
         
-        # 2. Generate UAP
-        UAP = core.generate_UAP(global_model, self.train_loader)
+        # 2. Generate UAP (with feedback loop)
+        UAP = core.generate_UAP(global_model, self.train_loader, init_uap=self.uap)
+        self.uap = UAP.detach() # Update local UAP state for next round
         
         # 3. Adversarial Training
         model = copy.deepcopy(global_model)
         model = core.adversarial_training(model, combined_loader, UAP, epochs=self.args.local_ep)
         
         # 4. Pruning + Fine-tuning
-        model = core.prune_and_finetune(model, combined_loader, threshold=0.1, epochs=self.args.local_ep)
+        pruning_thresh = self.args.sparsity if hasattr(self.args, 'sparsity') else 0.1
+        model = core.prune_and_finetune(model, combined_loader, threshold=pruning_thresh, epochs=self.args.local_ep)
         
         # Calculate update
         final_params = parameters_to_vector([model.state_dict()[name] for name in model.state_dict()]).detach()

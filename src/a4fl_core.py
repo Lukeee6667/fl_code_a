@@ -100,9 +100,13 @@ class A4FL_Core:
         
         return DataLoader(TensorDataset(X_combined, y_combined), batch_size=self.args.bs, shuffle=True)
 
-    def generate_UAP(self, model, clean_loader, epsilon=0.05, steps=10):
+    def generate_UAP(self, model, clean_loader, epsilon=0.05, steps=10, init_uap=None):
         model.eval()
-        UAP = torch.zeros((3, 32, 32), device=self.device, requires_grad=True)
+        if init_uap is not None:
+            UAP = init_uap.clone().detach().to(self.device).requires_grad_(True)
+        else:
+            UAP = torch.zeros((3, 32, 32), device=self.device, requires_grad=True)
+            
         optimizer = optim.SGD([UAP], lr=0.01)
         
         # Use a few batches for UAP generation
