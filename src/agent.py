@@ -116,17 +116,18 @@ class Agent():
 
     def local_train_a4fl(self, global_model, criterion, round=None):
         # A4FL Defense Training Logic
+        # ALL clients (benign AND malicious) execute the A4FL defense steps.
+        # Malicious clients will try to inject poison during 'create_training_samples' or via their data,
+        # but the defense steps (UAP, pruning) are mandatory for everyone in this protocol.
         
-        if self.id < self.args.num_corrupt:
-            # Malicious client: Use standard local_train (which has attack logic)
-            return self.local_train(global_model, criterion, round, neurotoxin_mask=None, bypass_a4fl=True)
-            
         initial_global_model_params = parameters_to_vector(
             [global_model.state_dict()[name] for name in global_model.state_dict()]).detach()
             
         core = A4FL_Core(self.args, self.args.device)
         
         # 1. Create Samples
+        # For malicious clients, self.train_loader already contains poisoned data (from init).
+        # But A4FL enforces mixing with "messy" samples (unlearning) which might conflict with their goal.
         combined_loader = core.create_training_samples(self.train_loader, global_model)
         
         # 2. Generate UAP (with feedback loop)
