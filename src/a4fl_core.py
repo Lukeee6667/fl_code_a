@@ -83,7 +83,8 @@ class A4FL_Core:
         for i in range(len(X_messy)):
             X_messy[i] = self.add_trigger(X_messy[i], self.args.pattern_type, similar=False)
         
-        y_messy = torch.ones_like(y_clean[indices]) * self.args.target_class
+        # CRITICAL FIX: Map triggered images to CORRECT labels to unlearn backdoor
+        y_messy = y_clean[indices]
         
         # 3. Wrap Samples (Clean + Similar Trigger -> Original Label)
         indices_wrap = np.random.choice(len(X_clean), min(m, len(X_clean)), replace=False)
@@ -185,9 +186,11 @@ class A4FL_Core:
                 
         return importance
 
-    def prune_and_finetune(self, model, loader, threshold=0.1, epochs=2):
+    def prune_and_finetune(self, model, loader, threshold=0.1, epochs=2, importance_loader=None):
         # 1. Calculate importance
-        importance = self.calculate_neuron_importance(model, loader)
+        # Use importance_loader if provided (e.g. clean data only), otherwise use training loader
+        calc_loader = importance_loader if importance_loader is not None else loader
+        importance = self.calculate_neuron_importance(model, calc_loader)
         
         # 2. Prune (Apply mask)
         mask = {}
