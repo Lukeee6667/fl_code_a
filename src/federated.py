@@ -142,6 +142,7 @@ if __name__ == "__main__":
             "alignins_ims",
             "ims",
             "a4fl",
+            "a4fl_alignins",
         ],
         help="aggregation function to aggregate agents' local weights",
     )
