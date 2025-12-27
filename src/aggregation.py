@@ -59,6 +59,11 @@ class Aggregation():
                 logging.warning("A4FL: No auxiliary data loader provided! Statistical test may fail.")
             aggregated_updates = aggregator.aggregate(agent_updates_dict, global_model, data_loader, self.agent_data_sizes)
         
+        elif self.args.aggr == 'a4fl_alignins':
+            # A4FL Local Defense + AlignIns Global Aggregation
+            # Use AlignIns+FedUP Correct Implementation for aggregation
+            aggregated_updates = self.agg_alignins_fedup_correct(agent_updates_dict, cur_global_params, global_model, current_round)
+        
         elif self.args.aggr == 'alignins_ims':
             # AlignIns + IMS: First use AlignIns to get initial update, then refine with IMS
             # 1. Get AlignIns update

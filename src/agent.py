@@ -49,7 +49,7 @@ class Agent():
     def local_train(self, global_model, criterion, round=None, neurotoxin_mask=None, bypass_a4fl=False):
         # print(len(self.train_dataset))
         """ Do a local training over the received global model, return the update """
-        if self.args.aggr == 'a4fl' and not bypass_a4fl:
+        if (self.args.aggr == 'a4fl' or self.args.aggr == 'a4fl_alignins') and not bypass_a4fl:
             return self.local_train_a4fl(global_model, criterion, round)
 
         # start = time.time()

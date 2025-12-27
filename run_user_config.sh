@@ -305,6 +305,27 @@ config_a4fl() {
         --server_lr $SERVER_LR
 }
 
+# 配置13：A4FL + AlignIns 混合防御配置
+config_a4fl_alignins() {
+    echo "=== A4FL + AlignIns 混合防御配置 ==="
+    echo "本地防御：A4FL (Unlearning + UAP + Pruning)"
+    echo "全局聚合：AlignIns + FedUP (Statistical Filtering + Pruning)"
+    
+    CUDA_VISIBLE_DEVICES=0,1 python src/federated.py \
+        --poison_frac $POISON_FRAC \
+        --num_corrupt $NUM_CORRUPT \
+        --num_agents $NUM_AGENTS \
+        --aggr a4fl_alignins \
+        --data $DATA \
+        --attack $ATTACK \
+        $NON_IID \
+        --beta $BETA \
+        --local_ep $LOCAL_EP \
+        --bs $BS \
+        --client_lr $CLIENT_LR \
+        --server_lr $SERVER_LR
+}
+
 # =============================================================================
 # 显示配置选项
 # =============================================================================
@@ -325,6 +346,7 @@ show_configs() {
     echo "10. config_alignins_not_unlearning - AlignIns + NoT Unlearning"
     echo "11. config_alignins_ims   - AlignIns + IMS"
     echo "12. config_a4fl           - A4FL 防御配置"
+    echo "13. config_a4fl_alignins  - A4FL + AlignIns 混合防御"
     echo "=========================================="
     echo "当前GPU配置: CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
     echo "当前聚合方法: $AGGR_METHOD"
@@ -362,7 +384,8 @@ interactive_config() {
         10) config_alignins_not_unlearning ;;
         11) config_alignins_ims ;;
         12) config_a4fl ;;
-        *) echo "无效选择，请输入1-12之间的数字" ;;
+        13) config_a4fl_alignins ;;
+        *) echo "无效选择，请输入1-13之间的数字" ;;
     esac
 }
 
