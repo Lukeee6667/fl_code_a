@@ -10,11 +10,43 @@ echo "用户自定义配置 - AlignIns+FedUP实验"
 echo "=========================================="
 
 # =============================================================================
-# 用户常用配置参数
+# GPU 选择逻辑
 # =============================================================================
 
-# GPU配置
-export CUDA_VISIBLE_DEVICES=0,1
+setup_gpu() {
+    echo "=========================================="
+    echo "正在检测可用GPU..."
+    if command -v nvidia-smi &> /dev/null; then
+        echo "检测到以下GPU设备:"
+        # 显示GPU索引、名称、显存使用情况
+        nvidia-smi --query-gpu=index,name,memory.used,memory.total,utilization.gpu --format=csv
+    else
+        echo "警告: 未找到 nvidia-smi 命令，无法列出GPU详情。"
+    fi
+    echo "=========================================="
+    
+    # 默认值
+    DEFAULT_GPU="0,1"
+    
+    read -p "请输入要使用的GPU编号 (例如 0 或 0,1) [默认: $DEFAULT_GPU]: " GPU_INPUT
+    
+    if [ -z "$GPU_INPUT" ]; then
+        GPU_IDS="$DEFAULT_GPU"
+    else
+        GPU_IDS="$GPU_INPUT"
+    fi
+    
+    export CUDA_VISIBLE_DEVICES="$GPU_IDS"
+    echo "已设置 CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
+    echo "=========================================="
+}
+
+# 在脚本开始时调用 GPU 设置
+setup_gpu
+
+# =============================================================================
+# 用户常用配置参数
+# =============================================================================
 
 # 基础实验参数 (基于用户提供的配置)
 POISON_FRAC=0.3             # 投毒比例
@@ -58,7 +90,7 @@ FEDUP_SENSITIVITY_THRESHOLD=0.5
 config_user_original() {
     echo "=== 用户原始配置 + 正确AlignIns+FedUP实现 ==="
     
-    CUDA_VISIBLE_DEVICES=0,1 python src/federated.py \
+    python src/federated.py \
         --poison_frac $POISON_FRAC \
         --num_corrupt $NUM_CORRUPT \
         --num_agents $NUM_AGENTS \
@@ -77,7 +109,7 @@ config_user_original() {
 config_enhanced() {
     echo "=== 增强版配置 (更多轮数) ==="
     
-    CUDA_VISIBLE_DEVICES=0,1 python src/federated.py \
+    python src/federated.py \
         --poison_frac $POISON_FRAC \
         --num_corrupt $NUM_CORRUPT \
         --num_agents $NUM_AGENTS \
@@ -97,7 +129,7 @@ config_enhanced() {
 config_high_attack() {
     echo "=== 高攻击强度配置 ==="
     
-    CUDA_VISIBLE_DEVICES=0,1 python src/federated.py \
+    python src/federated.py \
         --poison_frac 0.5 \
         --num_corrupt 15 \
         --num_agents $NUM_AGENTS \
@@ -116,7 +148,7 @@ config_high_attack() {
 config_dba_attack() {
     echo "=== DBA攻击配置 ==="
     
-    CUDA_VISIBLE_DEVICES=0,1 python src/federated.py \
+    python src/federated.py \
         --poison_frac $POISON_FRAC \
         --num_corrupt $NUM_CORRUPT \
         --num_agents $NUM_AGENTS \
@@ -135,7 +167,7 @@ config_dba_attack() {
 config_cifar100() {
     echo "=== CIFAR-100配置 ==="
     
-    CUDA_VISIBLE_DEVICES=0,1 python src/federated.py \
+    python src/federated.py \
         --poison_frac $POISON_FRAC \
         --num_corrupt $NUM_CORRUPT \
         --num_agents $NUM_AGENTS \
@@ -154,7 +186,7 @@ config_cifar100() {
 config_compare_hybrid() {
     echo "=== 对比实验 - 混合方法 ==="
     
-    CUDA_VISIBLE_DEVICES=0,1 python src/federated.py \
+    python src/federated.py \
         --poison_frac $POISON_FRAC \
         --num_corrupt $NUM_CORRUPT \
         --num_agents $NUM_AGENTS \
@@ -172,7 +204,7 @@ config_compare_hybrid() {
 config_not_unlearning() {
     echo "=== NoT联邦遗忘方法 ==="
     
-    CUDA_VISIBLE_DEVICES=0,1 python src/federated.py \
+    python src/federated.py \
         --poison_frac $POISON_FRAC \
         --num_corrupt $NUM_CORRUPT \
         --num_agents $NUM_AGENTS \
@@ -194,7 +226,7 @@ config_not_unlearning() {
 config_ims() {
     echo "=== IMS防御配置 ==="
     
-    CUDA_VISIBLE_DEVICES=0,1 python src/federated.py \
+    python src/federated.py \
         --poison_frac $POISON_FRAC \
         --num_corrupt $NUM_CORRUPT \
         --num_agents $NUM_AGENTS \
@@ -218,7 +250,7 @@ config_ims() {
 config_alignins_not_unlearning() {
     echo "=== AlignIns + NoT Unlearning ==="
     
-    CUDA_VISIBLE_DEVICES=0,1 python src/federated.py \
+    python src/federated.py \
         --poison_frac $POISON_FRAC \
         --num_corrupt $NUM_CORRUPT \
         --num_agents $NUM_AGENTS \
@@ -240,7 +272,7 @@ config_alignins_not_unlearning() {
 config_alignins_ims() {
     echo "=== AlignIns + IMS ==="
     
-    CUDA_VISIBLE_DEVICES=0,1 python src/federated.py \
+    python src/federated.py \
         --poison_frac $POISON_FRAC \
         --num_corrupt $NUM_CORRUPT \
         --num_agents $NUM_AGENTS \
@@ -271,7 +303,7 @@ config_custom() {
     CUSTOM_NUM_AGENTS=${3:-$NUM_AGENTS}
     CUSTOM_ATTACK=${4:-$ATTACK}
     
-    CUDA_VISIBLE_DEVICES=0,1 python src/federated.py \
+    python src/federated.py \
         --poison_frac $CUSTOM_POISON_FRAC \
         --num_corrupt $CUSTOM_NUM_CORRUPT \
         --num_agents $CUSTOM_NUM_AGENTS \
@@ -290,7 +322,7 @@ config_custom() {
 config_a4fl() {
     echo "=== A4FL 防御配置 ==="
     
-    CUDA_VISIBLE_DEVICES=0,1 python src/federated.py \
+    python src/federated.py \
         --poison_frac $POISON_FRAC \
         --num_corrupt $NUM_CORRUPT \
         --num_agents $NUM_AGENTS \
@@ -311,7 +343,7 @@ config_a4fl_alignins() {
     echo "本地防御：A4FL (Unlearning + UAP + Pruning)"
     echo "全局聚合：AlignIns + FedUP (Statistical Filtering + Pruning)"
     
-    CUDA_VISIBLE_DEVICES=0,1 python src/federated.py \
+    python src/federated.py \
         --poison_frac $POISON_FRAC \
         --num_corrupt $NUM_CORRUPT \
         --num_agents $NUM_AGENTS \
@@ -392,14 +424,6 @@ interactive_config() {
 # =============================================================================
 # 主程序
 # =============================================================================
-
-# 检查GPU可用性
-echo "检查GPU状态..."
-if command -v nvidia-smi &> /dev/null; then
-    nvidia-smi --query-gpu=index,name,memory.used,memory.total --format=csv,noheader,nounits | head -2
-else
-    echo "警告: 未找到nvidia-smi命令，无法检查GPU状态"
-fi
 
 echo "当前CUDA_VISIBLE_DEVICES: $CUDA_VISIBLE_DEVICES"
 echo

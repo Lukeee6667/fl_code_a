@@ -60,9 +60,11 @@ class Aggregation():
             aggregated_updates = aggregator.aggregate(agent_updates_dict, global_model, data_loader, self.agent_data_sizes)
         
         elif self.args.aggr == 'a4fl_alignins':
-            # A4FL Local Defense + AlignIns Global Aggregation
-            # Use AlignIns+FedUP Correct Implementation for aggregation
-            aggregated_updates = self.agg_alignins_fedup_correct(agent_updates_dict, cur_global_params, global_model, current_round)
+            # A4FL + AlignIns Hybrid Aggregation
+            # Phase 1: AlignIns Detection (Unsupervised)
+            # Phase 2: A4FL Validation (Supervised with Aux Data)
+            data_loader = auxiliary_data_loader if auxiliary_data_loader is not None else self.auxiliary_data_loader
+            aggregated_updates = self.agg_a4fl_alignins(agent_updates_dict, cur_global_params, global_model, data_loader)
         
         elif self.args.aggr == 'alignins_ims':
             # AlignIns + IMS: First use AlignIns to get initial update, then refine with IMS
@@ -314,6 +316,22 @@ class Aggregation():
         
         return aggregated_update
 
+    def agg_a4fl_alignins(self, agent_updates_dict, flat_global_model, global_model, auxiliary_loader):
+        """
+        A4FL + AlignIns 混合聚合
+        """
+        from agg_a4fl_alignins import agg_a4fl_alignins
+        
+        aggregated_update = agg_a4fl_alignins(
+            agent_updates_dict,
+            flat_global_model,
+            global_model,
+            self.args,
+            auxiliary_loader,
+            self.agent_data_sizes
+        )
+        return aggregated_update
+
     def agg_ims(self, agent_updates_dict, flat_global_model, global_model, auxiliary_data_loader, current_round=None, initial_update=None):
         """
         IMS: Intelligent Mask Selection
@@ -446,108 +464,34 @@ class Aggregation():
         return self._generate_unlearn_mask_ranking(agent_updates_dict, suspicious_clients, global_model, pruning_ratio)
 
     def agg_alignins(self, agent_updates_dict, flat_global_model):
-        local_updates = []
-        benign_id = []
-        malicious_id = []
-
-        for _id, update in agent_updates_dict.items():
-            local_updates.append(update)
-            if _id < self.args.num_corrupt:
-                malicious_id.append(_id)
-            else:
-                benign_id.append(_id)
-
-        chosen_clients = malicious_id + benign_id
-        num_chosen_clients = len(malicious_id + benign_id)
-        inter_model_updates = torch.stack(local_updates, dim=0)
-
-        tda_list = []
-        mpsa_list = []
-        major_sign = torch.sign(torch.sum(torch.sign(inter_model_updates), dim=0))
-        cos = torch.nn.CosineSimilarity(dim=0, eps=1e-6)
-        for i in range(len(inter_model_updates)):
-            _, init_indices = torch.topk(torch.abs(inter_model_updates[i]), int(len(inter_model_updates[i]) * self.args.sparsity))
-
-            mpsa_list.append((torch.sum(torch.sign(inter_model_updates[i][init_indices]) == major_sign[init_indices]) / torch.numel(inter_model_updates[i][init_indices])).item())
-    
-            tda_list.append(cos(inter_model_updates[i], flat_global_model).item())
-
-
-        logging.info('TDA: %s' % [round(i, 4) for i in tda_list])
-        logging.info('MPSA: %s' % [round(i, 4) for i in mpsa_list])
-
-
-        ######## MZ-score calculation ########
-        mpsa_std = np.std(mpsa_list)
-        mpsa_med = np.median(mpsa_list)
-
-        mzscore_mpsa = []
-        for i in range(len(mpsa_list)):
-            mzscore_mpsa.append(np.abs(mpsa_list[i] - mpsa_med) / mpsa_std)
-
-        logging.info('MZ-score of MPSA: %s' % [round(i, 4) for i in mzscore_mpsa])
+        """
+        AlignIns aggregation using the improved AlignInsDetector module.
+        Includes 4 metrics (TDA, MPSA, Grad Norm, Mean Cos) and 3-layer detection.
+        """
+        from alignins_detector import AlignInsDetector, weighted_filter_aggregation
         
-        tda_std = np.std(tda_list)
-        tda_med = np.median(tda_list)
-        mzscore_tda = []
-        for i in range(len(tda_list)):
-            mzscore_tda.append(np.abs(tda_list[i] - tda_med) / tda_std)
-
-        logging.info('MZ-score of TDA: %s' % [round(i, 4) for i in mzscore_tda])
-
-        ######## Anomaly detection with MZ score ########
-
-        benign_idx1 = set([i for i in range(num_chosen_clients)])
-        benign_idx1 = benign_idx1.intersection(set([int(i) for i in np.argwhere(np.array(mzscore_mpsa) < self.args.lambda_s)]))
-        benign_idx2 = set([i for i in range(num_chosen_clients)])
-        benign_idx2 = benign_idx2.intersection(set([int(i) for i in np.argwhere(np.array(mzscore_tda) < self.args.lambda_c)]))
-
-        benign_set = benign_idx2.intersection(benign_idx1)
+        # Extract updates
+        client_ids = list(agent_updates_dict.keys())
+        inter_model_updates = torch.stack([agent_updates_dict[cid] for cid in client_ids])
         
-        benign_idx = list(benign_set)
-        if len(benign_idx) == 0:
-            return torch.zeros_like(local_updates[0])
-
-        benign_updates = torch.stack([local_updates[i] for i in benign_idx], dim=0)
-
-        ######## Post-filtering model clipping ########
+        # Phase 1: Detection
+        detector = AlignInsDetector(self.args)
+        detection_results = detector.detect(inter_model_updates)
         
-        updates_norm = torch.norm(benign_updates, dim=1).reshape((-1, 1))
-        norm_clip = updates_norm.median(dim=0)[0].item()
-        benign_updates = torch.stack(local_updates, dim=0)
-        updates_norm = torch.norm(benign_updates, dim=1).reshape((-1, 1))
-        updates_norm_clipped = torch.clamp(updates_norm, 0, norm_clip, out=None)
-        # del grad_norm
+        # Logging results
+        logging.info(f"AlignIns Detection Results:")
+        logging.info(f"  Benign: {len(detection_results['benign'])}")
+        logging.info(f"  Suspicious: {len(detection_results['suspicious'])}")
+        logging.info(f"  Malicious: {len(detection_results['malicious'])}")
         
-        benign_updates = (benign_updates/updates_norm)*updates_norm_clipped
-
-        correct = 0
-        for idx in benign_idx:
-            if idx >= len(malicious_id):
-                correct += 1
-
-        TPR = correct / len(benign_id)
-
-        if len(malicious_id) == 0:
-            FPR = 0
-        else:
-            wrong = 0
-            for idx in benign_idx:
-                if idx < len(malicious_id):
-                    wrong += 1
-            FPR = wrong / len(malicious_id)
-
-        logging.info('benign update index:   %s' % str(benign_id))
-        logging.info('selected update index: %s' % str(benign_idx))
-
-        logging.info('FPR:       %.4f'  % FPR)
-        logging.info('TPR:       %.4f' % TPR)
-
-        current_dict = {}
-        for idx in benign_idx:
-            current_dict[chosen_clients[idx]] = benign_updates[idx]
-
-        aggregated_update = self.agg_avg(current_dict)
+        # Phase 2: Weighted Aggregation
+        aggregated_update = weighted_filter_aggregation(
+            inter_model_updates,
+            detection_results,
+            benign_weight=1.0,
+            suspicious_weight=0.5
+        )
+        
         return aggregated_update
     
     def agg_alignins_v(self, agent_updates_dict, flat_global_model, current_round=None):
