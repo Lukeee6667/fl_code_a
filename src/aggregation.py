@@ -320,7 +320,10 @@ class Aggregation():
         """
         A4FL + AlignIns 混合聚合
         """
-        from agg_a4fl_alignins import agg_a4fl_alignins
+        try:
+            from src.agg_a4fl_alignins import agg_a4fl_alignins
+        except ImportError:
+            from agg_a4fl_alignins import agg_a4fl_alignins
         
         aggregated_update = agg_a4fl_alignins(
             agent_updates_dict,
@@ -468,7 +471,10 @@ class Aggregation():
         AlignIns aggregation using the improved AlignInsDetector module.
         Includes 4 metrics (TDA, MPSA, Grad Norm, Mean Cos) and 3-layer detection.
         """
-        from alignins_detector import AlignInsDetector, weighted_filter_aggregation
+        try:
+            from src.alignins_detector import AlignInsDetector, weighted_filter_aggregation
+        except ImportError:
+            from alignins_detector import AlignInsDetector, weighted_filter_aggregation
         
         # Extract updates
         client_ids = list(agent_updates_dict.keys())
