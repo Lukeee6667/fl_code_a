@@ -166,6 +166,7 @@ if __name__ == "__main__":
     parser.add_argument("--lambda_s", type=float, default=1.0)
     parser.add_argument("--lambda_c", type=float, default=1.0)
     parser.add_argument("--lambda_g", type=float, default=1.5)
+    parser.add_argument("--lambda_mean_cos", type=float, default=1.5)
     parser.add_argument("--suspicious_weight", type=float, default=0.5, help="Weight for suspicious clients in AlignIns")
     
     # FedUP相关参数（基于论文）
