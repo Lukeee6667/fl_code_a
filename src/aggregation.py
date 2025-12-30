@@ -495,7 +495,7 @@ class Aggregation():
             inter_model_updates,
             detection_results,
             benign_weight=1.0,
-            suspicious_weight=0.5
+            suspicious_weight=getattr(self.args, 'suspicious_weight', 0.5)
         )
         
         return aggregated_update

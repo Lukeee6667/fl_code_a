@@ -289,7 +289,11 @@ config_alignins_ims() {
         --ims_r2 15 \
         --ims_r3 5 \
         --ims_k 20 \
-        --ims_epsilon 1.0
+        --ims_epsilon 1.0 \
+        --suspicious_weight $SUSPICIOUS_WEIGHT \
+        --lambda_s $ALIGNINS_STANDARD_THRESHOLD \
+        --lambda_c $ALIGNINS_STANDARD_THRESHOLD \
+        --lambda_mean_cos $ALIGNINS_STANDARD_THRESHOLD
 }
 
 # 配置7：自定义参数配置
