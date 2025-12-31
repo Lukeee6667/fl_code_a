@@ -210,6 +210,12 @@ if __name__ == "__main__":
     args.num_target = per_data_dict["num_target"][args.data]
 
     args.log_dir = utils.setup_logging(args)
+    
+    # 记录所有超参数
+    logging.info("================ Hyperparameters ================")
+    for arg in vars(args):
+        logging.info(f"{arg}: {getattr(args, arg)}")
+    logging.info("=================================================")
 
     train_dataset, val_dataset = utils.get_datasets(args.data)
     backdoor_train_dataset = None
