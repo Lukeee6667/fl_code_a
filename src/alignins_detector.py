@@ -124,7 +124,7 @@ class AlignInsDetector:
                               num_clients: int) -> Dict[str, Set[int]]:
         """三层检测策略"""
         # 第一层：严格阈值检测明确良性客户端
-        strict_factor = 0.8
+        strict_factor = getattr(self.args, 'strict_factor', 0.8)
         strict_lambda_s = self.lambda_s * strict_factor
         strict_lambda_c = self.lambda_c * strict_factor
         strict_lambda_g = self.lambda_g * strict_factor

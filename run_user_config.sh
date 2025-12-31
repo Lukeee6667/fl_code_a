@@ -72,8 +72,8 @@ NOT_FINETUNE_LR=0.0001
 
 # AlignIns参数
 ALIGNINS_STRICT_THRESHOLD=0.7
-ALIGNINS_STANDARD_THRESHOLD=0.85
-SUSPICIOUS_WEIGHT=0.3
+ALIGNINS_STANDARD_THRESHOLD=1.5
+SUSPICIOUS_WEIGHT=0.5
 
 # FedUP参数
 FEDUP_PRUNING_RATIO=0.1
@@ -291,8 +291,10 @@ config_alignins_ims() {
         --ims_k 20 \
         --ims_epsilon 1.0 \
         --suspicious_weight $SUSPICIOUS_WEIGHT \
+        --strict_factor $ALIGNINS_STRICT_THRESHOLD \
         --lambda_s $ALIGNINS_STANDARD_THRESHOLD \
         --lambda_c $ALIGNINS_STANDARD_THRESHOLD \
+        --lambda_g $ALIGNINS_STANDARD_THRESHOLD \
         --lambda_mean_cos $ALIGNINS_STANDARD_THRESHOLD
 }
 

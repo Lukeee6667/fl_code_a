@@ -168,6 +168,7 @@ if __name__ == "__main__":
     parser.add_argument("--lambda_g", type=float, default=1.5)
     parser.add_argument("--lambda_mean_cos", type=float, default=1.5)
     parser.add_argument("--suspicious_weight", type=float, default=0.5, help="Weight for suspicious clients in AlignIns")
+    parser.add_argument("--strict_factor", type=float, default=0.8, help="Factor for strict threshold in AlignIns (default: 0.8)")
     
     # FedUP相关参数（基于论文）
     parser.add_argument('--fedup_pruning_ratio', type=float, default=0.1,
