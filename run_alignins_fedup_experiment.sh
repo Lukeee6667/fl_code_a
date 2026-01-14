@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# 使用第一个GPU (ID: 0)
+export CUDA_VISIBLE_DEVICES=0
+
 python src/federated.py \
      --poison_frac 0.3 \
      --num_corrupt 10 \

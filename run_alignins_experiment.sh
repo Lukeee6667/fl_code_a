@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# 使用第二个GPU (ID: 1)
+export CUDA_VISIBLE_DEVICES=1
+
 python src/federated.py \
      --poison_frac 0.3 \
      --num_corrupt 10 \
