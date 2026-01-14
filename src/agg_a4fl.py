@@ -112,6 +112,46 @@ class A4FL_Aggregator:
         
         aggregated_update = accumulated_update / total_samples
         
+        # === A4FL Active Defense (UAP Generation + Finetuning) ===
+        # 仅在纯 A4FL 模式下启用，以免影响其他混合策略
+        if self.args.aggr == 'a4fl': 
+             logging.info("A4FL: Starting Active Defense (UAP Generation + Finetuning)...")
+             
+             # 1. Reconstruct Model (Current Global + Aggregated Update)
+             temp_model = copy.deepcopy(global_model)
+             new_params = initial_params + aggregated_update
+             utils.vector_to_model(new_params, temp_model)
+             
+             # 2. Generate UAP (Universal Adversarial Perturbation)
+             # 利用辅助数据生成通用扰动，该扰动能使模型产生最大误差
+             logging.info("A4FL: Generating UAP...")
+             uap = self.a4fl_core.generate_UAP(temp_model, auxiliary_loader, steps=5)
+             
+             # 3. Adversarial Training (Finetuning)
+             # 使用 UAP 进行对抗训练，增强模型对潜在后门的鲁棒性
+             logging.info("A4FL: Performing Adversarial Finetuning...")
+             # 使用较小的学习率进行微调
+             original_lr = self.args.client_lr
+             # 临时调整学习率用于微调 (通常比训练学习率小)
+             # self.args.client_lr = 0.01 
+             
+             finetuned_model = self.a4fl_core.adversarial_training(
+                 temp_model, 
+                 auxiliary_loader, 
+                 uap, 
+                 epochs=2 # 保持少量 epoch 以节省时间
+             )
+             
+             # 恢复参数 (如果修改了args)
+             # self.args.client_lr = original_lr
+             
+             # 4. Calculate Final Update
+             # 计算微调后的模型与上一轮全局模型的差值，作为最终更新量
+             final_params = parameters_to_vector([finetuned_model.state_dict()[name] for name in finetuned_model.state_dict()]).detach()
+             aggregated_update = final_params - initial_params
+             
+             logging.info("A4FL: Active Defense Completed.")
+
         return aggregated_update, None
 
     def _simple_avg(self, agent_updates_dict, agent_data_sizes):
