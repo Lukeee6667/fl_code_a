@@ -364,6 +364,37 @@ config_a4fl_alignins() {
         --server_lr $SERVER_LR
 }
 
+# 配置14：AlignIns + IMS (Mask Recovery)
+config_alignins_ims_recover() {
+    echo "=== AlignIns + IMS (Mask Recovery) ==="
+    echo "引入掩码恢复机制的 IMS 改进版"
+    
+    python src/federated.py \
+        --poison_frac $POISON_FRAC \
+        --num_corrupt $NUM_CORRUPT \
+        --num_agents $NUM_AGENTS \
+        --aggr "alignins_ims_recover" \
+        --data $DATA \
+        --attack $ATTACK \
+        $NON_IID \
+        --beta $BETA \
+        --local_ep $LOCAL_EP \
+        --bs $BS \
+        --client_lr $CLIENT_LR \
+        --server_lr $SERVER_LR \
+        --ims_r1 20 \
+        --ims_r2 15 \
+        --ims_r3 5 \
+        --ims_k 20 \
+        --ims_epsilon 1.0 \
+        --suspicious_weight $SUSPICIOUS_WEIGHT \
+        --strict_factor $ALIGNINS_STRICT_THRESHOLD \
+        --lambda_s $ALIGNINS_STANDARD_THRESHOLD \
+        --lambda_c $ALIGNINS_STANDARD_THRESHOLD \
+        --lambda_g $ALIGNINS_STANDARD_THRESHOLD \
+        --lambda_mean_cos $ALIGNINS_STANDARD_THRESHOLD
+}
+
 # =============================================================================
 # 显示配置选项
 # =============================================================================

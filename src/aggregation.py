@@ -86,6 +86,20 @@ class Aggregation():
             # Ensure auxiliary_data_loader is available
             data_loader = auxiliary_data_loader if auxiliary_data_loader is not None else self.auxiliary_data_loader
             aggregated_updates = self.agg_ims(agent_updates_dict, cur_global_params, global_model, data_loader, current_round=current_round)
+        elif self.args.aggr == 'alignins_ims_recover':
+            # AlignIns + IMS with Mask Recovery
+            try:
+                from agg_ims_recover import agg_ims_recover
+            except ImportError:
+                from src.agg_ims_recover import agg_ims_recover
+            
+            # 1. Get AlignIns update
+            alignins_update = self.agg_alignins(agent_updates_dict, cur_global_params)
+            
+            # 2. Use it as initial_update for IMS-Recover
+            data_loader = auxiliary_data_loader if auxiliary_data_loader is not None else self.auxiliary_data_loader
+            aggregated_updates = agg_ims_recover(agent_updates_dict, cur_global_params, global_model, self.args, data_loader, current_round=current_round, initial_update=alignins_update)
+
         elif self.args.aggr == 'not_unlearning':
             aggregated_updates = self.agg_not_unlearning(agent_updates_dict, cur_global_params, global_model, current_round)
         elif self.args.aggr=='alignins_v':
