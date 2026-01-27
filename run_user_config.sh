@@ -416,6 +416,7 @@ show_configs() {
     echo "11. config_alignins_ims   - AlignIns + IMS"
     echo "12. config_a4fl           - A4FL 防御配置"
     echo "13. config_a4fl_alignins  - A4FL + AlignIns 混合防御"
+    echo "14. config_alignins_ims_recover - AlignIns + IMS (Mask Recovery)"
     echo "=========================================="
     echo "当前GPU配置: CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
     echo "当前聚合方法: $AGGR_METHOD"
@@ -434,7 +435,7 @@ show_configs() {
 interactive_config() {
     show_configs
     echo
-    read -p "请选择配置 (1-13): " choice
+    read -p "请选择配置 (1-14): " choice
     
     case $choice in
         1) config_user_original ;;
@@ -454,7 +455,8 @@ interactive_config() {
         11) config_alignins_ims ;;
         12) config_a4fl ;;
         13) config_a4fl_alignins ;;
-        *) echo "无效选择，请输入1-13之间的数字" ;;
+        14) config_alignins_ims_recover ;;
+        *) echo "无效选择，请输入1-14之间的数字" ;;
     esac
 }
 
