@@ -144,6 +144,7 @@ if __name__ == "__main__":
             "a4fl",
             "a4fl_alignins",
             "alignins_ims_recover",
+            "ims_fast",
         ],
         help="aggregation function to aggregate agents' local weights",
     )
@@ -290,7 +291,7 @@ if __name__ == "__main__":
     #     pin_memory=False
     # )
     auxiliary_data_loader = None
-    if args.aggr == 'alignins_plr' or args.aggr == 'ims' or args.aggr == 'alignins_ims' or args.aggr == 'a4fl' or args.aggr == 'a4fl_alignins' or args.aggr == 'alignins_ims_recover':
+    if args.aggr == 'alignins_plr' or args.aggr == 'ims' or args.aggr == 'alignins_ims' or args.aggr == 'a4fl' or args.aggr == 'a4fl_alignins' or args.aggr == 'alignins_ims_recover' or args.aggr == 'ims_fast':
         # 先导入prepare_auxiliary_data函数
         from aggregation import Aggregation
         

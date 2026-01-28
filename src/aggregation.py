@@ -86,6 +86,10 @@ class Aggregation():
             # Ensure auxiliary_data_loader is available
             data_loader = auxiliary_data_loader if auxiliary_data_loader is not None else self.auxiliary_data_loader
             aggregated_updates = self.agg_ims(agent_updates_dict, cur_global_params, global_model, data_loader, current_round=current_round)
+        elif self.args.aggr == 'ims_fast':
+            # IMS Fast: Optimized Intelligent Mask Selection
+            data_loader = auxiliary_data_loader if auxiliary_data_loader is not None else self.auxiliary_data_loader
+            aggregated_updates = self.agg_ims_fast(agent_updates_dict, cur_global_params, global_model, data_loader, current_round=current_round)
         elif self.args.aggr == 'alignins_ims_recover':
             # AlignIns + IMS with Mask Recovery
             try:
@@ -361,6 +365,28 @@ class Aggregation():
             return self.agg_avg(agent_updates_dict)
             
         aggregated_update = agg_ims(
+            agent_updates_dict,
+            flat_global_model,
+            global_model,
+            self.args,
+            auxiliary_data_loader,
+            current_round=current_round,
+            initial_update=initial_update
+        )
+        return aggregated_update
+
+    def agg_ims_fast(self, agent_updates_dict, flat_global_model, global_model, auxiliary_data_loader, current_round=None, initial_update=None):
+        """
+        IMS Fast: Optimized Intelligent Mask Selection
+        """
+        from agg_ims_fast import agg_ims_fast
+        
+        if auxiliary_data_loader is None:
+            import logging
+            logging.warning("IMS Fast: No auxiliary data loader provided! Falling back to FedAvg.")
+            return self.agg_avg(agent_updates_dict)
+            
+        aggregated_update = agg_ims_fast(
             agent_updates_dict,
             flat_global_model,
             global_model,

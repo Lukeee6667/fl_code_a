@@ -396,6 +396,31 @@ config_alignins_ims_recover() {
         --lambda_mean_cos $ALIGNINS_STANDARD_THRESHOLD
 }
 
+# 配置15：IMS Fast (Optimized)
+config_ims_fast() {
+    echo "=== IMS Fast (Optimized) ==="
+    echo "IMS优化版：In-place掩码应用 + Clean Output缓存"
+    
+    python src/federated.py \
+        --poison_frac $POISON_FRAC \
+        --num_corrupt $NUM_CORRUPT \
+        --num_agents $NUM_AGENTS \
+        --aggr "ims_fast" \
+        --data $DATA \
+        --attack $ATTACK \
+        $NON_IID \
+        --beta $BETA \
+        --local_ep $LOCAL_EP \
+        --bs $BS \
+        --client_lr $CLIENT_LR \
+        --server_lr $SERVER_LR \
+        --ims_r1 20 \
+        --ims_r2 15 \
+        --ims_r3 5 \
+        --ims_k 20 \
+        --ims_epsilon 1.0
+}
+
 # =============================================================================
 # 显示配置选项
 # =============================================================================
@@ -436,7 +461,7 @@ show_configs() {
 interactive_config() {
     show_configs
     echo
-    read -p "请选择配置 (1-14): " choice
+    read -p "请选择配置 (1-15): " choice
     
     case $choice in
         1) config_user_original ;;
