@@ -289,6 +289,7 @@ config_alignins_ims() {
         --ims_r2 15 \
         --ims_r3 5 \
         --ims_k 20 \
+        --ims_lambda_final 0.5 \
         --ims_epsilon 1.0 \
         --suspicious_weight $SUSPICIOUS_WEIGHT \
         --strict_factor $ALIGNINS_STRICT_THRESHOLD \

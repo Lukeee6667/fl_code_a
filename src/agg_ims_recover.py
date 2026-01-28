@@ -19,7 +19,7 @@ class IMSRecoverAggregator:
         self.r3 = getattr(args, 'ims_r3', 5)     # Inner loop rounds
         self.k = getattr(args, 'ims_k', 20)      # Scaling factor
         self.lambda_init = getattr(args, 'ims_lambda_init', 0.0)
-        self.lambda_final = getattr(args, 'ims_lambda_final', 10.0)
+        self.lambda_final = getattr(args, 'ims_lambda_final', 0.5)
         self.epsilon = getattr(args, 'ims_epsilon', 1.0) # Perturbation constraint
         self.margin = getattr(args, 'ims_margin', 0.5)
         
@@ -294,18 +294,27 @@ class IMSRecoverAggregator:
                         # Strong negative gradient means "increasing 'a' will reduce loss significantly"
                         # We use a threshold for the gradient magnitude
                         # For simplicity, we use the top-k gradients or a fixed threshold?
-                        # Let's use relative threshold based on mean gradient
-                        mean_grad = torch.mean(torch.abs(grad_momentum[i]))
-                        strong_signal = grad_momentum[i] < - (mean_grad * 2.0) # Heuristic
+                        # Use Quantile-based threshold for robustness against Non-IID noise
+                        abs_grad = torch.abs(grad_momentum[i])
+                        # Calculate top 10% threshold (90th percentile) to avoid outliers affecting mean
+                        if abs_grad.numel() > 0:
+                            top_k_threshold = torch.quantile(abs_grad, 0.90)
+                        else:
+                            top_k_threshold = 0.0
+                            
+                        # Strong negative gradient means we should increase mask value to reduce loss
+                        # We only recover if the gradient signal is very strong (top 10%)
+                        strong_signal = grad_momentum[i] < -top_k_threshold 
                         
                         recover_mask = is_pruned & strong_signal
+                        num_recovered = recover_mask.sum().item()
                         
-                        if recover_mask.any():
-                            # Boost the mask value
-                            # a[recover_mask] += self.recovery_rate
-                            # Or set to a small positive value to give it a chance
+                        if num_recovered > 0:
+                            # Boost the mask value carefully
+                            # Reset to a low but active state (0.2) to allow gradients to flow again
                             a[recover_mask] = torch.max(a[recover_mask], torch.tensor(0.2, device=self.device))
-                            # logging.debug(f"Recovered {recover_mask.sum()} neurons in layer {i}")
+                            if batch_idx % 10 == 0 and i == 0: # Log occasionally for first layer
+                                logging.debug(f"Layer {i}: Recovered {num_recovered} neurons. Threshold: {top_k_threshold:.4f}")
                             
                 # --- Mask Recovery Logic End ---
                 
