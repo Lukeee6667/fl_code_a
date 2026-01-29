@@ -443,6 +443,7 @@ show_configs() {
     echo "12. config_a4fl           - A4FL 防御配置"
     echo "13. config_a4fl_alignins  - A4FL + AlignIns 混合防御"
     echo "14. config_alignins_ims_recover - AlignIns + IMS (Mask Recovery)"
+    echo "15. config_ims_fast         - IMS Fast (Optimized)"
     echo "=========================================="
     echo "当前GPU配置: CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
     echo "当前聚合方法: $AGGR_METHOD"
@@ -482,7 +483,8 @@ interactive_config() {
         12) config_a4fl ;;
         13) config_a4fl_alignins ;;
         14) config_alignins_ims_recover ;;
-        *) echo "无效选择，请输入1-14之间的数字" ;;
+        15) config_ims_fast ;;
+        *) echo "无效选择，请输入1-15之间的数字" ;;
     esac
 }
 
