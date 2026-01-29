@@ -368,6 +368,16 @@ class IMSAggregator:
         else:
              avg_update = torch.stack(list(agent_updates_dict.values())).mean(dim=0)
         
+        # Default start round to 100 if not specified
+        start_round = getattr(self.args, 'ims_start_round', 100)
+        
+        # Standard FedAvg (or initial_update) for the first 'start_round' rounds
+        if current_round is not None and current_round < start_round:
+            # logging.info(f"IMS Fast: Round {current_round} < {start_round}, performing standard FedAvg.")
+            return avg_update
+
+        logging.info(f"IMS Fast: Round {current_round} >= {start_round}, executing IMS defense.")
+        
         candidate_model = copy.deepcopy(global_model)
         cur_params = parameters_to_vector(candidate_model.parameters())
         server_lr = self.args.server_lr
