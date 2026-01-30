@@ -366,6 +366,8 @@ class Aggregation():
         if auxiliary_data_loader is None:
             import logging
             logging.warning("IMS: No auxiliary data loader provided! Falling back to FedAvg.")
+            if initial_update is not None:
+                return initial_update
             return self.agg_avg(agent_updates_dict)
             
         aggregated_update = agg_ims(
@@ -388,6 +390,8 @@ class Aggregation():
         if auxiliary_data_loader is None:
             import logging
             logging.warning("IMS Fast: No auxiliary data loader provided! Falling back to FedAvg.")
+            if initial_update is not None:
+                return initial_update
             return self.agg_avg(agent_updates_dict)
             
         aggregated_update = agg_ims_fast(
