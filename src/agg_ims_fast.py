@@ -74,6 +74,9 @@ class IMSAggregator:
         self.lambda_final = getattr(args, 'ims_lambda_final', 10.0)
         self.epsilon = getattr(args, 'ims_epsilon', 1.0)
         self.margin = getattr(args, 'ims_margin', 0.5)
+        self.clean_agree_weight = getattr(args, 'ims_clean_agree_weight', 1.0)
+        self.backdoor_recover_weight = getattr(args, 'ims_backdoor_recover_weight', 1.0)
+        self.poison_entropy_weight = getattr(args, 'ims_poison_entropy_weight', 0.0)
         
     def _get_prunable_layers(self, model):
         layers = []
@@ -308,6 +311,8 @@ class IMSAggregator:
                 # So this term is constant for the optimization of A and S!
                 # It doesn't affect gradients of A/S. We can skip computing it for optimization, 
                 # but maybe keep it for loss reporting.
+                entropy = -torch.mean(torch.sum(p_hat_A_prime * torch.log(p_hat_A_prime + 1e-8), dim=1))
+                poison_entropy_loss = -entropy
                 
                 reg_loss = 0
                 total_params = 0
@@ -316,7 +321,13 @@ class IMSAggregator:
                     total_params += s.numel()
                 reg_loss = current_lambda * (reg_loss / total_params)
                 
-                batch_loss = clean_agree_loss + backdoor_recover_loss + backdoor_valid_loss + reg_loss
+                batch_loss = (
+                    self.clean_agree_weight * clean_agree_loss
+                    + self.backdoor_recover_weight * backdoor_recover_loss
+                    + self.poison_entropy_weight * poison_entropy_loss
+                    + backdoor_valid_loss
+                    + reg_loss
+                )
                 
                 optimizer.zero_grad()
                 batch_loss.backward()

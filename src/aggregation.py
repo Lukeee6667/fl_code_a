@@ -90,6 +90,10 @@ class Aggregation():
             # IMS Fast: Optimized Intelligent Mask Selection
             data_loader = auxiliary_data_loader if auxiliary_data_loader is not None else self.auxiliary_data_loader
             aggregated_updates = self.agg_ims_fast(agent_updates_dict, cur_global_params, global_model, data_loader, current_round=current_round)
+        elif self.args.aggr == 'alignins_ims_fast_plus':
+            alignins_update = self.agg_alignins(agent_updates_dict, cur_global_params)
+            data_loader = auxiliary_data_loader if auxiliary_data_loader is not None else self.auxiliary_data_loader
+            aggregated_updates = self.agg_ims_fast(agent_updates_dict, cur_global_params, global_model, data_loader, current_round=current_round, initial_update=alignins_update)
         elif self.args.aggr == 'alignins_ims_recover':
             # AlignIns + IMS with Mask Recovery
             try:

@@ -145,6 +145,7 @@ if __name__ == "__main__":
             "a4fl_alignins",
             "alignins_ims_recover",
             "ims_fast",
+            "alignins_ims_fast_plus",
         ],
         help="aggregation function to aggregate agents' local weights",
     )
@@ -193,6 +194,9 @@ if __name__ == "__main__":
     parser.add_argument('--ims_lambda_init', type=float, default=0.0, help='IMS lambda init')
     parser.add_argument('--ims_lambda_final', type=float, default=10.0, help='IMS lambda final')
     parser.add_argument('--ims_epsilon', type=float, default=1.0, help='IMS perturbation constraint')
+    parser.add_argument('--ims_clean_agree_weight', type=float, default=1.0, help='IMS clean agree loss weight')
+    parser.add_argument('--ims_backdoor_recover_weight', type=float, default=1.0, help='IMS backdoor recover loss weight')
+    parser.add_argument('--ims_poison_entropy_weight', type=float, default=0.0, help='IMS poison entropy loss weight')
 
     args = parser.parse_args()
 

@@ -421,6 +421,42 @@ config_ims_fast() {
         --ims_epsilon 1.0
 }
 
+# 配置16：AlignIns + IMS Fast Plus
+config_alignins_ims_fast_plus() {
+    echo "=== AlignIns + IMS Fast Plus ==="
+    echo "对齐过滤 + IMS快速版 + 额外稳健损失"
+    
+    python src/federated.py \
+        --poison_frac $POISON_FRAC \
+        --num_corrupt $NUM_CORRUPT \
+        --num_agents $NUM_AGENTS \
+        --aggr "alignins_ims_fast_plus" \
+        --data $DATA \
+        --attack $ATTACK \
+        $NON_IID \
+        --beta $BETA \
+        --local_ep $LOCAL_EP \
+        --bs $BS \
+        --client_lr $CLIENT_LR \
+        --server_lr $SERVER_LR \
+        --ims_start_round 10 \
+        --ims_r1 20 \
+        --ims_r2 15 \
+        --ims_r3 5 \
+        --ims_k 25 \
+        --ims_lambda_final 3.0 \
+        --ims_epsilon 1.0 \
+        --ims_clean_agree_weight 1.0 \
+        --ims_backdoor_recover_weight 1.1 \
+        --ims_poison_entropy_weight 0.2 \
+        --suspicious_weight 0.2 \
+        --strict_factor $ALIGNINS_STRICT_THRESHOLD \
+        --lambda_s $ALIGNINS_STANDARD_THRESHOLD \
+        --lambda_c $ALIGNINS_STANDARD_THRESHOLD \
+        --lambda_g $ALIGNINS_STANDARD_THRESHOLD \
+        --lambda_mean_cos $ALIGNINS_STANDARD_THRESHOLD
+}
+
 # =============================================================================
 # 显示配置选项
 # =============================================================================
@@ -444,6 +480,7 @@ show_configs() {
     echo "13. config_a4fl_alignins  - A4FL + AlignIns 混合防御"
     echo "14. config_alignins_ims_recover - AlignIns + IMS (Mask Recovery)"
     echo "15. config_ims_fast         - IMS Fast (Optimized)"
+    echo "16. config_alignins_ims_fast_plus - AlignIns + IMS Fast Plus"
     echo "=========================================="
     echo "当前GPU配置: CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
     echo "当前聚合方法: $AGGR_METHOD"
@@ -462,7 +499,7 @@ show_configs() {
 interactive_config() {
     show_configs
     echo
-    read -p "请选择配置 (1-15): " choice
+    read -p "请选择配置 (1-16): " choice
     
     case $choice in
         1) config_user_original ;;
@@ -484,7 +521,8 @@ interactive_config() {
         13) config_a4fl_alignins ;;
         14) config_alignins_ims_recover ;;
         15) config_ims_fast ;;
-        *) echo "无效选择，请输入1-15之间的数字" ;;
+        16) config_alignins_ims_fast_plus ;;
+        *) echo "无效选择，请输入1-16之间的数字" ;;
     esac
 }
 
