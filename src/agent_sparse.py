@@ -167,12 +167,12 @@ class Agent():
                 self.mask = self.mask 
 
             elif self.args.attack == "omniscient":
-                if len(global_mask):
+                if global_mask is not None and len(global_mask):
                     self.mask = copy.deepcopy(global_mask)
                 else:
                     self.mask = self.mask 
             elif self.args.attack == "neurotoxin":
-                if len(neurotoxin_mask):
+                if neurotoxin_mask is not None and len(neurotoxin_mask):
                     self.mask = neurotoxin_mask
                 else:
                     self.mask = self.mask

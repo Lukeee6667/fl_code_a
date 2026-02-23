@@ -53,12 +53,12 @@ POISON_FRAC=0.3             # 投毒比例
 NUM_CORRUPT=10              # 恶意客户端数量
 NUM_AGENTS=40               # 客户端总数
 DATA="cifar10"              # 数据集
-ATTACK="badnet"             # 攻击类型
+ATTACK="neurotoxin"             # 攻击类型
 NON_IID="--non_iid"         # 非独立同分布
 BETA=0.5                    # Dirichlet分布参数
 
 # 聚合方法选择
-AGGR_METHOD="alignins_fedup_correct"  # 使用正确的实现
+AGGR_METHOD="alignins"  # 使用正确的实现
 
 # 其他参数 (可根据需要调整)
 LOCAL_EP=2                  # 本地训练轮数
@@ -66,8 +66,8 @@ BS=64                       # 批次大小
 CLIENT_LR=0.1               # 客户端学习率
 SERVER_LR=1                 # 服务器学习率
 ROUNDS=100                  # 通信轮数 (根据数据集自动调整)
-NOT_FINETUNE_ROUNDS=5       # 微调轮数 (改为5轮)
-NOT_FINETUNE_LOCAL_EP=1
+NOT_FINETUNE_ROUNDS=1       # 微调轮数 (改为5轮)
+NOT_FINETUNE_LOCAL_EP=10
 NOT_FINETUNE_LR=0.0001
 
 # AlignIns参数
@@ -439,22 +439,252 @@ config_alignins_ims_fast_plus() {
         --bs $BS \
         --client_lr $CLIENT_LR \
         --server_lr $SERVER_LR \
-        --ims_start_round 10 \
+        --ims_start_round 100 \
         --ims_r1 20 \
         --ims_r2 15 \
         --ims_r3 5 \
-        --ims_k 25 \
-        --ims_lambda_final 3.0 \
+        --ims_k 20 \
+        --ims_lambda_final 10.0 \
         --ims_epsilon 1.0 \
         --ims_clean_agree_weight 1.0 \
-        --ims_backdoor_recover_weight 1.1 \
-        --ims_poison_entropy_weight 0.2 \
-        --suspicious_weight 0.2 \
-        --strict_factor $ALIGNINS_STRICT_THRESHOLD \
+        --ims_backdoor_recover_weight 1.0 \
+        --ims_poison_entropy_weight 0.0 \
+        --suspicious_weight 0.3 \
+        --strict_factor 0.8 \
         --lambda_s $ALIGNINS_STANDARD_THRESHOLD \
         --lambda_c $ALIGNINS_STANDARD_THRESHOLD \
         --lambda_g $ALIGNINS_STANDARD_THRESHOLD \
         --lambda_mean_cos $ALIGNINS_STANDARD_THRESHOLD
+}
+
+# 配置17：AlignIns + IMS Standard (Custom Request)
+config_alignins_ims_standard() {
+    echo "=== AlignIns + IMS Standard (Config 17) ==="
+    echo "AlignIns (Strict=0.8) + 普通 IMS (Config 9)"
+    
+    python src/federated.py \
+        --poison_frac $POISON_FRAC \
+        --num_corrupt $NUM_CORRUPT \
+        --num_agents $NUM_AGENTS \
+        --aggr "alignins_ims" \
+        --data $DATA \
+        --attack $ATTACK \
+        $NON_IID \
+        --beta $BETA \
+        --local_ep $LOCAL_EP \
+        --bs $BS \
+        --client_lr $CLIENT_LR \
+        --server_lr $SERVER_LR \
+        --ims_start_round 100 \
+        --ims_r1 20 \
+        --ims_r2 15 \
+        --ims_r3 5 \
+        --ims_k 20 \
+        --ims_epsilon 1.0 \
+        --suspicious_weight 0.3 \
+        --strict_factor 0.8 \
+        --lambda_s $ALIGNINS_STANDARD_THRESHOLD \
+        --lambda_c $ALIGNINS_STANDARD_THRESHOLD \
+        --lambda_g $ALIGNINS_STANDARD_THRESHOLD \
+        --lambda_mean_cos $ALIGNINS_STANDARD_THRESHOLD
+}
+
+# 配置18：IMS Prune + Finetune
+config_ims_prune_finetune() {
+    echo "=== IMS Prune + Finetune (Config 18) ==="
+    echo "IMS结构化剪枝 + 轻量化微调 + 交互约束"
+    
+    python src/federated.py \
+        --poison_frac $POISON_FRAC \
+        --num_corrupt $NUM_CORRUPT \
+        --num_agents $NUM_AGENTS \
+        --aggr "ims_prune_finetune" \
+        --data $DATA \
+        --attack $ATTACK \
+        $NON_IID \
+        --beta $BETA \
+        --local_ep $LOCAL_EP \
+        --bs $BS \
+        --client_lr $CLIENT_LR \
+        --server_lr $SERVER_LR \
+        --ims_r1 20 \
+        --ims_r2 15 \
+        --ims_r3 5 \
+        --ims_k 20 \
+        --ims_epsilon 1.0 \
+        --not_finetune_rounds 5 \
+        --not_finetune_local_ep 2 \
+        --not_finetune_lr 0.0001
+}
+
+# 配置18-Stage1：运行至99轮并保存
+config_ims_prune_finetune_stage1() {
+    echo "=== IMS Prune + Finetune (Stage 1: 0-99 Rounds) ==="
+    echo "运行前99轮，生成checkpoint用于后续调试"
+    
+    python src/federated.py \
+        --poison_frac $POISON_FRAC \
+        --num_corrupt $NUM_CORRUPT \
+        --num_agents $NUM_AGENTS \
+        --aggr "ims_prune_finetune" \
+        --data $DATA \
+        --attack $ATTACK \
+        $NON_IID \
+        --beta $BETA \
+        --local_ep $LOCAL_EP \
+        --bs $BS \
+        --client_lr $CLIENT_LR \
+        --server_lr $SERVER_LR \
+        --ims_r1 20 \
+        --ims_r2 15 \
+        --ims_r3 5 \
+        --ims_k 20 \
+        --ims_epsilon 1.0 \
+        --not_finetune_rounds 5 \
+        --not_finetune_local_ep 2 \
+        --not_finetune_lr 0.0001 \
+        --rounds 99
+}
+
+# 配置18-Debug：从99轮恢复并调试
+config_ims_prune_finetune_debug() {
+    CHECKPOINT_PATH=$1
+    if [ -z "$CHECKPOINT_PATH" ]; then
+        echo "错误: 请提供Checkpoint路径"
+        echo "用法: bash run_user_config.sh config_ims_prune_finetune_debug <checkpoint_path>"
+        return
+    fi
+
+    echo "=== IMS Prune + Finetune (Debug: Resume from 99) ==="
+    echo "从Checkpoint恢复，执行第100轮(剪枝+微调)及后续"
+    
+    python src/federated.py \
+        --poison_frac $POISON_FRAC \
+        --num_corrupt $NUM_CORRUPT \
+        --num_agents $NUM_AGENTS \
+        --aggr "ims_prune_finetune" \
+        --data $DATA \
+        --attack $ATTACK \
+        $NON_IID \
+        --beta $BETA \
+        --local_ep $LOCAL_EP \
+        --bs $BS \
+        --client_lr $CLIENT_LR \
+        --server_lr $SERVER_LR \
+        --ims_r1 20 \
+        --ims_r2 15 \
+        --ims_r3 5 \
+        --ims_k 20 \
+        --ims_epsilon 1.0 \
+        --not_finetune_rounds 5 \
+        --not_finetune_local_ep 2 \
+        --not_finetune_lr 0.0001 \
+        --rounds 100 \
+        --resume \
+        --checkpoint_path "$CHECKPOINT_PATH"
+}
+
+# 配置19：原始AlignIns配置
+config_origin_alignins() {
+    echo "=== 原始AlignIns配置 (Config 19) ==="
+    echo "使用origin_alignins聚合方法"
+    
+    python src/federated.py \
+        --poison_frac $POISON_FRAC \
+        --num_corrupt $NUM_CORRUPT \
+        --num_agents $NUM_AGENTS \
+        --aggr "origin_alignins" \
+        --data $DATA \
+        --attack $ATTACK \
+        $NON_IID \
+        --beta $BETA \
+        --local_ep $LOCAL_EP \
+        --bs $BS \
+        --client_lr $CLIENT_LR \
+        --server_lr $SERVER_LR
+}
+
+# 配置20：原始AlignIns配置 + 4指标
+config_origin_alignins_4metrics() {
+    echo "=== 原始AlignIns配置 + 4指标 (Config 20) ==="
+    echo "使用origin_alignins_4metrics聚合方法"
+    
+    python src/federated.py \
+        --poison_frac $POISON_FRAC \
+        --num_corrupt $NUM_CORRUPT \
+        --num_agents $NUM_AGENTS \
+        --aggr "origin_alignins_4metrics" \
+        --data $DATA \
+        --attack $ATTACK \
+        $NON_IID \
+        --beta $BETA \
+        --local_ep $LOCAL_EP \
+        --bs $BS \
+        --client_lr $CLIENT_LR \
+        --server_lr $SERVER_LR \
+        --lambda_s 1.0 \
+        --lambda_c 1.0 \
+        --lambda_g 1.5 \
+        --lambda_mean_cos 1.5
+}
+
+# 配置22：Clustering + IMS Prune + Finetune
+config_origin_alignins_clustering_prune_finetune() {
+    echo "=== Clustering + IMS Prune + Finetune (Config 22) ==="
+    echo "使用origin_alignins_clustering_prune_finetune聚合方法"
+    echo "结合了聚类检测和IMS结构化剪枝+微调"
+    
+    python src/federated.py \
+        --poison_frac $POISON_FRAC \
+        --num_corrupt $NUM_CORRUPT \
+        --num_agents $NUM_AGENTS \
+        --aggr "origin_alignins_clustering_prune_finetune" \
+        --data $DATA \
+        --attack $ATTACK \
+        $NON_IID \
+        --beta $BETA \
+        --local_ep $LOCAL_EP \
+        --bs $BS \
+        --client_lr $CLIENT_LR \
+        --server_lr $SERVER_LR \
+        --rounds 105 \
+        --lambda_s 1.0 \
+        --lambda_c 1.0 \
+        --lambda_g 1.5 \
+        --lambda_mean_cos 1.5 \
+        --ims_start_round 100 \
+        --ims_r1 20 \
+        --ims_r2 15 \
+        --ims_r3 5 \
+        --ims_k 20 \
+        --ims_epsilon 1.0 \
+        --not_finetune_rounds 1 \
+        --not_finetune_local_ep 10 \
+        --not_finetune_lr 0.0001
+}
+
+# 配置21：原始AlignIns配置 + 聚类
+config_origin_alignins_clustering() {
+    echo "=== 原始AlignIns配置 + 聚类 (Config 21) ==="
+    echo "使用origin_alignins_clustering聚合方法"
+    
+    python src/federated.py \
+        --poison_frac $POISON_FRAC \
+        --num_corrupt $NUM_CORRUPT \
+        --num_agents $NUM_AGENTS \
+        --aggr "origin_alignins_clustering" \
+        --data $DATA \
+        --attack $ATTACK \
+        $NON_IID \
+        --beta $BETA \
+        --local_ep $LOCAL_EP \
+        --bs $BS \
+        --client_lr $CLIENT_LR \
+        --server_lr $SERVER_LR \
+        --lambda_s 1.0 \
+        --lambda_c 1.0 \
+        --lambda_g 1.5 \
+        --lambda_mean_cos 1.5
 }
 
 # =============================================================================
@@ -481,6 +711,14 @@ show_configs() {
     echo "14. config_alignins_ims_recover - AlignIns + IMS (Mask Recovery)"
     echo "15. config_ims_fast         - IMS Fast (Optimized)"
     echo "16. config_alignins_ims_fast_plus - AlignIns + IMS Fast Plus"
+    echo "17. config_alignins_ims_standard - AlignIns + IMS Standard"
+    echo "18. config_ims_prune_finetune - IMS Prune + Finetune (Config 18)"
+    echo "    config_ims_prune_finetune_stage1 - Config 18 Stage 1 (Run to 99)"
+    echo "    config_ims_prune_finetune_debug  - Config 18 Debug (Resume from checkpoint)"
+    echo "19. config_origin_alignins - 原始AlignIns配置 (Config 19)"
+    echo "20. config_origin_alignins_4metrics - 原始AlignIns配置 + 4指标 (Config 20)"
+    echo "21. config_origin_alignins_clustering - 原始AlignIns配置 + 聚类 (Config 21)"
+    echo "22. config_origin_alignins_clustering_prune_finetune - Clustering + IMS Prune + Finetune (Config 22)"
     echo "=========================================="
     echo "当前GPU配置: CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
     echo "当前聚合方法: $AGGR_METHOD"
@@ -499,7 +737,7 @@ show_configs() {
 interactive_config() {
     show_configs
     echo
-    read -p "请选择配置 (1-16): " choice
+    read -p "请选择配置 (1-22): " choice
     
     case $choice in
         1) config_user_original ;;
@@ -522,12 +760,18 @@ interactive_config() {
         14) config_alignins_ims_recover ;;
         15) config_ims_fast ;;
         16) config_alignins_ims_fast_plus ;;
-        *) echo "无效选择，请输入1-16之间的数字" ;;
+        17) config_alignins_ims_standard ;;
+        18) config_ims_prune_finetune ;;
+        19) config_origin_alignins ;;
+        20) config_origin_alignins_4metrics ;;
+        21) config_origin_alignins_clustering ;;
+        22) config_origin_alignins_clustering_prune_finetune ;;
+        *) echo "无效选择，请输入1-22之间的数字" ;;
     esac
 }
 
 # =============================================================================
-# 主程序
+# Main Program
 # =============================================================================
 
 echo "当前CUDA_VISIBLE_DEVICES: $CUDA_VISIBLE_DEVICES"
@@ -543,7 +787,7 @@ elif [ "$1" = "config_custom" ]; then
 else
     # 直接运行指定配置
     if declare -f "$1" > /dev/null; then
-        $1
+        "$@"
     else
         echo "错误: 未找到配置函数 $1"
         show_configs

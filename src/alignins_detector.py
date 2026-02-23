@@ -51,9 +51,22 @@ class AlignInsDetector:
         mz_mean_cos = self._mz_score(mean_cos_scores)
         
         # 三层检测策略
-        return self._three_layer_detection(
+        results = self._three_layer_detection(
             mz_tda, mz_mpsa, mz_grad_norm, mz_mean_cos, num_clients
         )
+        
+        results.update({
+            'tda_scores': tda_scores,
+            'mpsa_scores': mpsa_scores,
+            'grad_norm_scores': grad_norm_scores,
+            'mean_cos_scores': mean_cos_scores,
+            'mz_tda': mz_tda,
+            'mz_mpsa': mz_mpsa,
+            'mz_grad_norm': mz_grad_norm,
+            'mz_mean_cos': mz_mean_cos
+        })
+        
+        return results
 
     def _calculate_tda(self, inter_model_updates: torch.Tensor) -> np.ndarray:
         """计算TDA指标"""
