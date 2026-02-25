@@ -1,0 +1,57 @@
+#!/bin/bash
+POISON_FRAC=0.5
+NUM_CORRUPT=8
+NUM_AGENTS=30
+DATA="cifar10"
+ATTACK="badnet"
+NON_IID="--non_iid"
+BETA=0.5
+LOCAL_EP=2
+BS=64
+CLIENT_LR=0.1
+SERVER_LR=1
+ROUNDS=100
+LAMBDA_S=1.0
+LAMBDA_C=1.0
+LAMBDA_G=1.0
+LAMBDA_MEAN_COS=1.0
+NOT_FINETUNE_ROUNDS=1
+NOT_FINETUNE_LOCAL_EP=10
+NOT_FINETUNE_LR=0.0001
+BENIGN_WEIGHT=0.9
+SUSPICIOUS_WEIGHT=0.2
+MALICIOUS_WEIGHT=0.9
+EXP_NAME_EXTRA="bw${BENIGN_WEIGHT}_sw${SUSPICIOUS_WEIGHT}_mw${MALICIOUS_WEIGHT}"
+export CUDA_VISIBLE_DEVICES="1"
+
+python src/federated.py \
+    --poison_frac $POISON_FRAC \
+    --num_corrupt $NUM_CORRUPT \
+    --num_agents $NUM_AGENTS \
+    --aggr "origin_alignins_clustering_weighted3" \
+    --data $DATA \
+    --attack $ATTACK \
+    $NON_IID \
+    --beta $BETA \
+    --local_ep $LOCAL_EP \
+    --bs $BS \
+    --client_lr $CLIENT_LR \
+    --server_lr $SERVER_LR \
+    --rounds $ROUNDS \
+    --lambda_s $LAMBDA_S \
+    --lambda_c $LAMBDA_C \
+    --lambda_g $LAMBDA_G \
+    --lambda_mean_cos $LAMBDA_MEAN_COS \
+    --ims_start_round 100 \
+    --ims_r1 20 \
+    --ims_r2 15 \
+    --ims_r3 5 \
+    --ims_k 20 \
+    --ims_epsilon 1.0 \
+    --not_finetune_rounds $NOT_FINETUNE_ROUNDS \
+    --not_finetune_local_ep $NOT_FINETUNE_LOCAL_EP \
+    --not_finetune_lr $NOT_FINETUNE_LR \
+    --exp_name_extra $EXP_NAME_EXTRA \
+    --benign_weight $BENIGN_WEIGHT \
+    --suspicious_weight $SUSPICIOUS_WEIGHT \
+    --malicious_weight $MALICIOUS_WEIGHT

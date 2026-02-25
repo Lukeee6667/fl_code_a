@@ -1070,13 +1070,17 @@ class Aggregation():
         if len(benign_idx) + len(suspicious_idx) + len(malicious_idx) == 0:
             return torch.zeros_like(local_updates[0])
 
+        benign_weight = getattr(self.args, "benign_weight", 1.0)
+        suspicious_weight = getattr(self.args, "suspicious_weight", 0.5)
+        malicious_weight = getattr(self.args, "malicious_weight", 0.0)
+
         weights = [0.0 for _ in range(num_chosen_clients)]
         for idx in benign_idx:
-            weights[idx] = 0.9
+            weights[idx] = benign_weight
         for idx in suspicious_idx:
-            weights[idx] = 0.6
+            weights[idx] = suspicious_weight
         for idx in malicious_idx:
-            weights[idx] = 0.3
+            weights[idx] = malicious_weight
 
         weighted_updates = torch.zeros_like(local_updates[0])
         total_weight = 0.0
