@@ -130,6 +130,27 @@ class Aggregation():
         elif self.args.aggr == 'origin_alignins_clustering_weighted3':
             aggregated_updates = self.agg_origin_alignins_clustering_weighted3(agent_updates_dict, cur_global_params, current_round=current_round)
 
+        elif self.args.aggr == 'origin_alignins_clustering_gated2':
+            aggregated_updates = self.agg_origin_alignins_clustering_gated2(
+                agent_updates_dict,
+                cur_global_params,
+                global_model,
+                val_loader=val_loader,
+                poisoned_val_loader=poisoned_val_loader,
+                poisoned_val_only_x_loader=poisoned_val_only_x_loader,
+                current_round=current_round,
+            )
+
+        elif self.args.aggr == 'origin_alignins_clustering_gated2_auxclean':
+            aggregated_updates = self.agg_origin_alignins_clustering_gated2_auxclean(
+                agent_updates_dict,
+                cur_global_params,
+                global_model,
+                auxiliary_data_loader=auxiliary_data_loader,
+                auxiliary_data_loader_finetune=auxiliary_data_loader_finetune,
+                current_round=current_round,
+            )
+
         elif self.args.aggr == 'origin_alignins_clustering_prune_finetune':
             aggregated_updates = self.agg_origin_alignins_clustering_prune_finetune(
                 agent_updates_dict, 
@@ -1120,6 +1141,436 @@ class Aggregation():
         logging.info('TPR:       %.4f' % TPR)
 
         return aggregated_update
+
+    def agg_origin_alignins_clustering_gated2(
+        self,
+        agent_updates_dict,
+        flat_global_model,
+        global_model,
+        val_loader=None,
+        poisoned_val_loader=None,
+        poisoned_val_only_x_loader=None,
+        current_round=None,
+    ):
+        chosen_clients = sorted(agent_updates_dict.keys())
+        if len(chosen_clients) == 0:
+            return torch.zeros_like(flat_global_model)
+
+        local_updates = [agent_updates_dict[cid] for cid in chosen_clients]
+        inter_model_updates = torch.stack(local_updates, dim=0)
+
+        tda_list = []
+        mpsa_list = []
+        grad_norm_list = []
+        mean_cos_list = []
+
+        major_sign = torch.sign(torch.sum(torch.sign(inter_model_updates), dim=0))
+        cos = torch.nn.CosineSimilarity(dim=0, eps=1e-6)
+        mean_update = torch.mean(inter_model_updates, dim=0)
+
+        for i in range(len(inter_model_updates)):
+            _, init_indices = torch.topk(
+                torch.abs(inter_model_updates[i]),
+                int(len(inter_model_updates[i]) * self.args.sparsity),
+            )
+            mpsa_list.append(
+                (
+                    torch.sum(
+                        torch.sign(inter_model_updates[i][init_indices])
+                        == major_sign[init_indices]
+                    )
+                    / torch.numel(inter_model_updates[i][init_indices])
+                ).item()
+            )
+            tda_list.append(cos(inter_model_updates[i], flat_global_model).item())
+            grad_norm_list.append(torch.norm(inter_model_updates[i]).item())
+            mean_cos_list.append(cos(inter_model_updates[i], mean_update).item())
+
+        logging.info(f"Round {current_round} TDA: %s" % [round(i, 4) for i in tda_list])
+        logging.info(f"Round {current_round} MPSA: %s" % [round(i, 4) for i in mpsa_list])
+        logging.info(
+            f"Round {current_round} Grad Norm: %s" % [round(i, 4) for i in grad_norm_list]
+        )
+        logging.info(
+            f"Round {current_round} Mean Cos: %s" % [round(i, 4) for i in mean_cos_list]
+        )
+
+        mpsa_std = np.std(mpsa_list)
+        mpsa_med = np.median(mpsa_list)
+        mzscore_mpsa = [(np.abs(x - mpsa_med) / (mpsa_std + 1e-6)) for x in mpsa_list]
+        logging.info(
+            f"Round {current_round} MZ-score of MPSA: %s"
+            % [round(i, 4) for i in mzscore_mpsa]
+        )
+
+        tda_std = np.std(tda_list)
+        tda_med = np.median(tda_list)
+        mzscore_tda = [(np.abs(x - tda_med) / (tda_std + 1e-6)) for x in tda_list]
+        logging.info(
+            f"Round {current_round} MZ-score of TDA: %s"
+            % [round(i, 4) for i in mzscore_tda]
+        )
+
+        grad_norm_std = np.std(grad_norm_list)
+        grad_norm_med = np.median(grad_norm_list)
+        mzscore_grad_norm = [
+            (np.abs(x - grad_norm_med) / (grad_norm_std + 1e-6)) for x in grad_norm_list
+        ]
+        logging.info(
+            f"Round {current_round} MZ-score of Grad Norm: %s"
+            % [round(i, 4) for i in mzscore_grad_norm]
+        )
+
+        mean_cos_std = np.std(mean_cos_list)
+        mean_cos_med = np.median(mean_cos_list)
+        mzscore_mean_cos = [
+            (np.abs(x - mean_cos_med) / (mean_cos_std + 1e-6)) for x in mean_cos_list
+        ]
+        logging.info(
+            f"Round {current_round} MZ-score of Mean Cos: %s"
+            % [round(i, 4) for i in mzscore_mean_cos]
+        )
+
+        num_clients = len(chosen_clients)
+        if num_clients < 2:
+            benign_idx = [0]
+            suspicious_idx = []
+        else:
+            features = np.array(
+                [mzscore_mpsa, mzscore_tda, mzscore_grad_norm, mzscore_mean_cos]
+            ).T
+            try:
+                kmeans = KMeans(n_clusters=2, random_state=42, n_init=10).fit(features)
+                labels = kmeans.labels_
+                cluster_to_indices = {
+                    0: [i for i in range(num_clients) if labels[i] == 0],
+                    1: [i for i in range(num_clients) if labels[i] == 1],
+                }
+
+                def _agg_for_indices(idxs):
+                    if len(idxs) == 0:
+                        return torch.zeros_like(local_updates[0])
+                    weighted_updates = torch.zeros_like(local_updates[0])
+                    total_weight = 0.0
+                    for idx in idxs:
+                        client_id = chosen_clients[idx]
+                        weight = float(self.agent_data_sizes[client_id])
+                        weighted_updates += weight * local_updates[idx]
+                        total_weight += weight
+                    if total_weight > 0:
+                        return weighted_updates / total_weight
+                    return torch.zeros_like(local_updates[0])
+
+                if (
+                    val_loader is not None
+                    and poisoned_val_loader is not None
+                    and poisoned_val_only_x_loader is not None
+                ):
+                    criterion = torch.nn.CrossEntropyLoss().to(self.args.device)
+
+                    def _eval(update):
+                        test_model = copy.deepcopy(global_model).to(self.args.device)
+                        vector_to_model(
+                            flat_global_model + update * self.server_lr, test_model
+                        )
+                        clean_acc = utils.get_loss_n_accuracy(
+                            test_model,
+                            criterion,
+                            val_loader,
+                            self.args,
+                            current_round,
+                            self.args.num_target,
+                        )
+                        asr = utils.get_loss_n_accuracy(
+                            test_model,
+                            criterion,
+                            poisoned_val_loader,
+                            self.args,
+                            current_round,
+                            num_classes=self.args.num_target,
+                        )
+                        backdoor_acc = utils.get_loss_n_accuracy(
+                            test_model,
+                            criterion,
+                            poisoned_val_only_x_loader,
+                            self.args,
+                            current_round,
+                            self.args.num_target,
+                        )
+                        del test_model
+                        return clean_acc, asr, backdoor_acc
+
+                    upd0 = _agg_for_indices(cluster_to_indices[0])
+                    upd1 = _agg_for_indices(cluster_to_indices[1])
+                    c0_clean, c0_asr, c0_bd = _eval(upd0)
+                    c1_clean, c1_asr, c1_bd = _eval(upd1)
+
+                    key0 = (c0_bd, -c0_asr, c0_clean)
+                    key1 = (c1_bd, -c1_asr, c1_clean)
+                    benign_label = 0 if key0 >= key1 else 1
+                    suspicious_label = 1 - benign_label
+
+                    logging.info(
+                        "Gated2 cluster eval | C0: clean=%.4f asr=%.4f bd=%.4f | C1: clean=%.4f asr=%.4f bd=%.4f | benign=C%d"
+                        % (
+                            c0_clean,
+                            c0_asr,
+                            c0_bd,
+                            c1_clean,
+                            c1_asr,
+                            c1_bd,
+                            benign_label,
+                        )
+                    )
+                else:
+                    cluster_scores = {}
+                    for k in range(2):
+                        if np.sum(labels == k) == 0:
+                            cluster_scores[k] = float("inf")
+                        else:
+                            cluster_scores[k] = np.mean(
+                                np.linalg.norm(features[labels == k], axis=1)
+                            )
+                    ordered = sorted(cluster_scores.items(), key=lambda x: x[1])
+                    benign_label = ordered[0][0]
+                    suspicious_label = ordered[1][0]
+
+                benign_idx = cluster_to_indices[benign_label]
+                suspicious_idx = cluster_to_indices[suspicious_label]
+            except Exception as e:
+                logging.error(f"Clustering failed: {e}, falling back to keeping all as benign")
+                benign_idx = [i for i in range(num_clients)]
+                suspicious_idx = []
+
+        if len(benign_idx) == 0 and len(suspicious_idx) > 0:
+            benign_idx = suspicious_idx
+            suspicious_idx = []
+        if len(benign_idx) == 0:
+            benign_idx = [i for i in range(num_clients)]
+            suspicious_idx = []
+
+        def _agg_for_indices(idxs):
+            if len(idxs) == 0:
+                return torch.zeros_like(local_updates[0])
+            weighted_updates = torch.zeros_like(local_updates[0])
+            total_weight = 0.0
+            for idx in idxs:
+                client_id = chosen_clients[idx]
+                weight = float(self.agent_data_sizes[client_id])
+                weighted_updates += weight * local_updates[idx]
+                total_weight += weight
+            if total_weight > 0:
+                return weighted_updates / total_weight
+            return torch.zeros_like(local_updates[0])
+
+        selected_update = _agg_for_indices(benign_idx)
+
+        logging.info("selected benign idx: %s" % str(benign_idx))
+        logging.info("selected suspicious idx: %s" % str(suspicious_idx))
+        logging.info("Gated2 decision: choose one cluster per round (benign only)")
+
+        return selected_update
+
+    def agg_origin_alignins_clustering_gated2_auxclean(
+        self,
+        agent_updates_dict,
+        flat_global_model,
+        global_model,
+        auxiliary_data_loader=None,
+        auxiliary_data_loader_finetune=None,
+        current_round=None,
+    ):
+        chosen_clients = sorted(agent_updates_dict.keys())
+        if len(chosen_clients) == 0:
+            return torch.zeros_like(flat_global_model)
+
+        local_updates = [agent_updates_dict[cid] for cid in chosen_clients]
+        inter_model_updates = torch.stack(local_updates, dim=0)
+
+        tda_list = []
+        mpsa_list = []
+        grad_norm_list = []
+        mean_cos_list = []
+
+        major_sign = torch.sign(torch.sum(torch.sign(inter_model_updates), dim=0))
+        cos = torch.nn.CosineSimilarity(dim=0, eps=1e-6)
+        mean_update = torch.mean(inter_model_updates, dim=0)
+
+        for i in range(len(inter_model_updates)):
+            _, init_indices = torch.topk(
+                torch.abs(inter_model_updates[i]),
+                int(len(inter_model_updates[i]) * self.args.sparsity),
+            )
+            mpsa_list.append(
+                (
+                    torch.sum(
+                        torch.sign(inter_model_updates[i][init_indices])
+                        == major_sign[init_indices]
+                    )
+                    / torch.numel(inter_model_updates[i][init_indices])
+                ).item()
+            )
+            tda_list.append(cos(inter_model_updates[i], flat_global_model).item())
+            grad_norm_list.append(torch.norm(inter_model_updates[i]).item())
+            mean_cos_list.append(cos(inter_model_updates[i], mean_update).item())
+
+        logging.info(f"Round {current_round} TDA: %s" % [round(i, 4) for i in tda_list])
+        logging.info(f"Round {current_round} MPSA: %s" % [round(i, 4) for i in mpsa_list])
+        logging.info(
+            f"Round {current_round} Grad Norm: %s" % [round(i, 4) for i in grad_norm_list]
+        )
+        logging.info(
+            f"Round {current_round} Mean Cos: %s" % [round(i, 4) for i in mean_cos_list]
+        )
+
+        mpsa_std = np.std(mpsa_list)
+        mpsa_med = np.median(mpsa_list)
+        mzscore_mpsa = [(np.abs(x - mpsa_med) / (mpsa_std + 1e-6)) for x in mpsa_list]
+
+        tda_std = np.std(tda_list)
+        tda_med = np.median(tda_list)
+        mzscore_tda = [(np.abs(x - tda_med) / (tda_std + 1e-6)) for x in tda_list]
+
+        grad_norm_std = np.std(grad_norm_list)
+        grad_norm_med = np.median(grad_norm_list)
+        mzscore_grad_norm = [
+            (np.abs(x - grad_norm_med) / (grad_norm_std + 1e-6)) for x in grad_norm_list
+        ]
+
+        mean_cos_std = np.std(mean_cos_list)
+        mean_cos_med = np.median(mean_cos_list)
+        mzscore_mean_cos = [
+            (np.abs(x - mean_cos_med) / (mean_cos_std + 1e-6)) for x in mean_cos_list
+        ]
+
+        num_clients = len(chosen_clients)
+        if num_clients < 2:
+            benign_idx = [0]
+            suspicious_idx = []
+        else:
+            features = np.array(
+                [mzscore_mpsa, mzscore_tda, mzscore_grad_norm, mzscore_mean_cos]
+            ).T
+            try:
+                kmeans = KMeans(n_clusters=2, random_state=42, n_init=10).fit(features)
+                labels = kmeans.labels_
+                cluster_to_indices = {
+                    0: [i for i in range(num_clients) if labels[i] == 0],
+                    1: [i for i in range(num_clients) if labels[i] == 1],
+                }
+
+                def _agg_for_indices(idxs):
+                    if len(idxs) == 0:
+                        return torch.zeros_like(local_updates[0])
+                    weighted_updates = torch.zeros_like(local_updates[0])
+                    total_weight = 0.0
+                    for idx in idxs:
+                        client_id = chosen_clients[idx]
+                        weight = float(self.agent_data_sizes[client_id])
+                        weighted_updates += weight * local_updates[idx]
+                        total_weight += weight
+                    if total_weight > 0:
+                        return weighted_updates / total_weight
+                    return torch.zeros_like(local_updates[0])
+
+                aux_loader = (
+                    auxiliary_data_loader_finetune
+                    if auxiliary_data_loader_finetune is not None
+                    else auxiliary_data_loader
+                )
+
+                if aux_loader is not None:
+                    criterion = torch.nn.CrossEntropyLoss().to(self.args.device)
+
+                    def _eval_clean(update):
+                        test_model = copy.deepcopy(global_model).to(self.args.device)
+                        vector_to_model(
+                            flat_global_model + update * self.server_lr, test_model
+                        )
+                        test_model.eval()
+                        total_loss = 0.0
+                        total = 0
+                        correct = 0
+                        with torch.no_grad():
+                            for data, target in aux_loader:
+                                data = data.to(self.args.device)
+                                target = target.to(self.args.device)
+                                output = test_model(data)
+                                loss = criterion(output, target)
+                                bs = int(data.size(0))
+                                total_loss += float(loss.item()) * bs
+                                total += bs
+                                pred = output.argmax(dim=1)
+                                correct += int((pred == target).sum().item())
+                        del test_model
+                        if total == 0:
+                            return float("inf"), 0.0
+                        return total_loss / total, correct / total
+
+                    upd0 = _agg_for_indices(cluster_to_indices[0])
+                    upd1 = _agg_for_indices(cluster_to_indices[1])
+                    c0_loss, c0_acc = _eval_clean(upd0)
+                    c1_loss, c1_acc = _eval_clean(upd1)
+
+                    key0 = (-c0_loss, c0_acc)
+                    key1 = (-c1_loss, c1_acc)
+                    benign_label = 0 if key0 >= key1 else 1
+                    suspicious_label = 1 - benign_label
+
+                    logging.info(
+                        "Gated2AuxClean cluster eval | C0: loss=%.6f acc=%.4f | C1: loss=%.6f acc=%.4f | benign=C%d"
+                        % (c0_loss, c0_acc, c1_loss, c1_acc, benign_label)
+                    )
+                else:
+                    cluster_scores = {}
+                    for k in range(2):
+                        if np.sum(labels == k) == 0:
+                            cluster_scores[k] = float("inf")
+                        else:
+                            cluster_scores[k] = np.mean(
+                                np.linalg.norm(features[labels == k], axis=1)
+                            )
+                    ordered = sorted(cluster_scores.items(), key=lambda x: x[1])
+                    benign_label = ordered[0][0]
+                    suspicious_label = ordered[1][0]
+
+                benign_idx = cluster_to_indices[benign_label]
+                suspicious_idx = cluster_to_indices[suspicious_label]
+            except Exception as e:
+                logging.error(
+                    f"Gated2AuxClean clustering failed: {e}, falling back to keeping all as benign"
+                )
+                benign_idx = [i for i in range(num_clients)]
+                suspicious_idx = []
+
+        if len(benign_idx) == 0 and len(suspicious_idx) > 0:
+            benign_idx = suspicious_idx
+            suspicious_idx = []
+        if len(benign_idx) == 0:
+            benign_idx = [i for i in range(num_clients)]
+            suspicious_idx = []
+
+        def _agg_for_indices(idxs):
+            if len(idxs) == 0:
+                return torch.zeros_like(local_updates[0])
+            weighted_updates = torch.zeros_like(local_updates[0])
+            total_weight = 0.0
+            for idx in idxs:
+                client_id = chosen_clients[idx]
+                weight = float(self.agent_data_sizes[client_id])
+                weighted_updates += weight * local_updates[idx]
+                total_weight += weight
+            if total_weight > 0:
+                return weighted_updates / total_weight
+            return torch.zeros_like(local_updates[0])
+
+        selected_update = _agg_for_indices(benign_idx)
+
+        logging.info("selected benign idx: %s" % str(benign_idx))
+        logging.info("selected suspicious idx: %s" % str(suspicious_idx))
+        logging.info("Gated2AuxClean decision: choose one cluster by aux clean loss/acc")
+
+        return selected_update
 
     def agg_alignins_v(self, agent_updates_dict, flat_global_model, current_round=None):
         local_updates = []

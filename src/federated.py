@@ -153,6 +153,8 @@ if __name__ == "__main__":
             "ims_prune_finetune",
             "origin_alignins_clustering",
             "origin_alignins_clustering_weighted3",
+            "origin_alignins_clustering_gated2",
+            "origin_alignins_clustering_gated2_auxclean",
             "origin_alignins_clustering_prune_finetune",
         ],
         help="aggregation function to aggregate agents' local weights",
@@ -181,6 +183,8 @@ if __name__ == "__main__":
     parser.add_argument("--suspicious_weight", type=float, default=0.5, help="Weight for suspicious clients in AlignIns")
     parser.add_argument("--benign_weight", type=float, default=1.0, help="Weight for benign clients in 3-way aggregation")
     parser.add_argument("--malicious_weight", type=float, default=0.0, help="Weight for malicious clients in 3-way aggregation")
+    parser.add_argument("--gated2_asr_delta_max", type=float, default=0.02, help="Max allowed ASR increase for choosing B+S in gated2")
+    parser.add_argument("--gated2_bd_delta_max", type=float, default=0.02, help="Max allowed backdoor ACC drop for choosing B+S in gated2")
     parser.add_argument("--strict_factor", type=float, default=0.8, help="Factor for strict threshold in AlignIns (default: 0.8)")
     
     # FedUP相关参数（基于论文）
@@ -317,6 +321,7 @@ if __name__ == "__main__":
         'alignins_ims_recover',
         'ims_prune_finetune',
         'origin_alignins_clustering_prune_finetune',
+        'origin_alignins_clustering_gated2_auxclean',
         'a4fl',
         'a4fl_alignins',
     }:
@@ -336,12 +341,11 @@ if __name__ == "__main__":
         )
         
         if auxiliary_data_loader is None:
-            logging.warning("无法创建辅助数据加载器，PLR分析可能无法正常工作")
-        else:
-            logging.info("成功创建辅助数据加载器")
+            raise RuntimeError("辅助数据加载器创建失败，无法继续训练")
+        logging.info("成功创建辅助数据加载器")
             
         auxiliary_data_loader_finetune = None
-        if args.aggr in {'ims_prune_finetune', 'origin_alignins_clustering_prune_finetune'}:
+        if args.aggr in {'ims_prune_finetune', 'origin_alignins_clustering_prune_finetune', 'origin_alignins_clustering_gated2_auxclean'}:
             logging.info("Generating separate auxiliary data for fine-tuning...")
             auxiliary_data_loader_finetune = temp_aggregator.prepare_auxiliary_data(
                 args=args,
@@ -350,9 +354,8 @@ if __name__ == "__main__":
                 val_dataset=val_dataset
             )
             if auxiliary_data_loader_finetune is None:
-                logging.warning("Failed to create auxiliary data loader for fine-tuning")
-            else:
-                logging.info("Successfully created auxiliary data loader for fine-tuning")
+                raise RuntimeError("微调辅助数据加载器创建失败，无法继续训练")
+            logging.info("Successfully created auxiliary data loader for fine-tuning")
             
         # 删除临时聚合器，防止内存泄漏
         del temp_aggregator
