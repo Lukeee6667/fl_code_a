@@ -28,3 +28,15 @@ data
 
 src/logs
 
+# logs
+logs/
+logs/**
+
+# pictures
+pic_4/
+pic_5/
+pic_6/
+pic_7/
+
+# shell scripts
+*.sh

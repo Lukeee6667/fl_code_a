@@ -121,8 +121,14 @@ class Aggregation():
         elif self.args.aggr == 'origin_alignins_4metrics':
             aggregated_updates = self.agg_origin_alignins_4metrics(agent_updates_dict, cur_global_params, current_round=current_round)
 
+        elif self.args.aggr == 'origin_alignins_4metrics_voting':
+            aggregated_updates = self.agg_origin_alignins_4metrics_voting(agent_updates_dict, cur_global_params, current_round=current_round)
+
         elif self.args.aggr == 'origin_alignins_clustering':
             aggregated_updates = self.agg_origin_alignins_clustering(agent_updates_dict, cur_global_params, current_round=current_round)
+
+        elif self.args.aggr == 'origin_alignins_clustering_weighted3':
+            aggregated_updates = self.agg_origin_alignins_clustering_weighted3(agent_updates_dict, cur_global_params, current_round=current_round)
 
         elif self.args.aggr == 'origin_alignins_clustering_prune_finetune':
             aggregated_updates = self.agg_origin_alignins_clustering_prune_finetune(
@@ -660,6 +666,7 @@ class Aggregation():
         benign_idx4 = benign_idx4.intersection(set([int(i) for i in np.argwhere(np.array(mzscore_mean_cos) < self.args.lambda_mean_cos)]))
 
         benign_set = benign_idx2.intersection(benign_idx1).intersection(benign_idx3).intersection(benign_idx4)
+
         
         benign_idx = list(benign_set) 
         if len(benign_idx) == 0: 
@@ -705,6 +712,133 @@ class Aggregation():
             current_dict[chosen_clients[idx]] = benign_updates[idx] 
 
         aggregated_update = self.agg_avg(current_dict) 
+        return aggregated_update
+
+    def agg_origin_alignins_4metrics_voting(self, agent_updates_dict, flat_global_model, current_round=None):
+        local_updates = []
+        benign_id = []
+        malicious_id = []
+
+        for _id, update in agent_updates_dict.items():
+            local_updates.append(update)
+            if _id < self.args.num_corrupt:
+                malicious_id.append(_id)
+            else:
+                benign_id.append(_id)
+
+        chosen_clients = malicious_id + benign_id
+        num_chosen_clients = len(malicious_id + benign_id)
+        inter_model_updates = torch.stack(local_updates, dim=0)
+
+        tda_list = []
+        mpsa_list = []
+        grad_norm_list = []
+        mean_cos_list = []
+
+        major_sign = torch.sign(torch.sum(torch.sign(inter_model_updates), dim=0))
+        cos = torch.nn.CosineSimilarity(dim=0, eps=1e-6)
+        mean_update = torch.mean(inter_model_updates, dim=0)
+
+        for i in range(len(inter_model_updates)):
+            _, init_indices = torch.topk(torch.abs(inter_model_updates[i]), int(len(inter_model_updates[i]) * self.args.sparsity))
+
+            mpsa_list.append((torch.sum(torch.sign(inter_model_updates[i][init_indices]) == major_sign[init_indices]) / torch.numel(inter_model_updates[i][init_indices])).item())
+
+            tda_list.append(cos(inter_model_updates[i], flat_global_model).item())
+            grad_norm_list.append(torch.norm(inter_model_updates[i]).item())
+            mean_cos_list.append(cos(inter_model_updates[i], mean_update).item())
+
+        logging.info(f'Round {current_round} TDA: %s' % [round(i, 4) for i in tda_list])
+        logging.info(f'Round {current_round} MPSA: %s' % [round(i, 4) for i in mpsa_list])
+        logging.info(f'Round {current_round} Grad Norm: %s' % [round(i, 4) for i in grad_norm_list])
+        logging.info(f'Round {current_round} Mean Cos: %s' % [round(i, 4) for i in mean_cos_list])
+
+        mpsa_std = np.std(mpsa_list)
+        mpsa_med = np.median(mpsa_list)
+        mzscore_mpsa = []
+        for i in range(len(mpsa_list)):
+            mzscore_mpsa.append(np.abs(mpsa_list[i] - mpsa_med) / (mpsa_std + 1e-6))
+        logging.info(f'Round {current_round} MZ-score of MPSA: %s' % [round(i, 4) for i in mzscore_mpsa])
+
+        tda_std = np.std(tda_list)
+        tda_med = np.median(tda_list)
+        mzscore_tda = []
+        for i in range(len(tda_list)):
+            mzscore_tda.append(np.abs(tda_list[i] - tda_med) / (tda_std + 1e-6))
+        logging.info(f'Round {current_round} MZ-score of TDA: %s' % [round(i, 4) for i in mzscore_tda])
+
+        grad_norm_std = np.std(grad_norm_list)
+        grad_norm_med = np.median(grad_norm_list)
+        mzscore_grad_norm = []
+        for i in range(len(grad_norm_list)):
+            mzscore_grad_norm.append(np.abs(grad_norm_list[i] - grad_norm_med) / (grad_norm_std + 1e-6))
+        logging.info(f'Round {current_round} MZ-score of Grad Norm: %s' % [round(i, 4) for i in mzscore_grad_norm])
+
+        mean_cos_std = np.std(mean_cos_list)
+        mean_cos_med = np.median(mean_cos_list)
+        mzscore_mean_cos = []
+        for i in range(len(mean_cos_list)):
+            mzscore_mean_cos.append(np.abs(mean_cos_list[i] - mean_cos_med) / (mean_cos_std + 1e-6))
+        logging.info(f'Round {current_round} MZ-score of Mean Cos: %s' % [round(i, 4) for i in mzscore_mean_cos])
+
+        benign_idx1 = set([i for i in range(num_chosen_clients)])
+        benign_idx1 = benign_idx1.intersection(set([int(i) for i in np.argwhere(np.array(mzscore_mpsa) < self.args.lambda_s)]))
+        benign_idx2 = set([i for i in range(num_chosen_clients)])
+        benign_idx2 = benign_idx2.intersection(set([int(i) for i in np.argwhere(np.array(mzscore_tda) < self.args.lambda_c)]))
+        benign_idx3 = set([i for i in range(num_chosen_clients)])
+        benign_idx3 = benign_idx3.intersection(set([int(i) for i in np.argwhere(np.array(mzscore_grad_norm) < self.args.lambda_g)]))
+        benign_idx4 = set([i for i in range(num_chosen_clients)])
+        benign_idx4 = benign_idx4.intersection(set([int(i) for i in np.argwhere(np.array(mzscore_mean_cos) < self.args.lambda_mean_cos)]))
+
+        from collections import Counter
+        vote_counts = Counter()
+        for s in [benign_idx1, benign_idx2, benign_idx3, benign_idx4]:
+            vote_counts.update(s)
+
+        vote_threshold = 3
+        benign_set = {idx for idx, count in vote_counts.items() if count >= vote_threshold}
+        if len(benign_set) == 0:
+            benign_set = {idx for idx, count in vote_counts.items() if count >= 2}
+
+        benign_idx = list(benign_set)
+        if len(benign_idx) == 0:
+            return torch.zeros_like(local_updates[0])
+
+        benign_updates = torch.stack([local_updates[i] for i in benign_idx], dim=0)
+
+        updates_norm = torch.norm(benign_updates, dim=1).reshape((-1, 1))
+        norm_clip = updates_norm.median(dim=0)[0].item()
+        benign_updates = torch.stack(local_updates, dim=0)
+        updates_norm = torch.norm(benign_updates, dim=1).reshape((-1, 1))
+        updates_norm_clipped = torch.clamp(updates_norm, 0, norm_clip, out=None)
+        benign_updates = (benign_updates / updates_norm) * updates_norm_clipped
+
+        correct = 0
+        for idx in benign_idx:
+            if idx >= len(malicious_id):
+                correct += 1
+
+        TPR = correct / len(benign_id) if len(benign_id) > 0 else 0
+
+        if len(malicious_id) == 0:
+            FPR = 0
+        else:
+            wrong = 0
+            for idx in benign_idx:
+                if idx < len(malicious_id):
+                    wrong += 1
+            FPR = wrong / len(malicious_id)
+
+        logging.info('benign update index:   %s' % str(benign_id))
+        logging.info('selected update index: %s' % str(benign_idx))
+        logging.info('FPR:       %.4f'  % FPR)
+        logging.info('TPR:       %.4f' % TPR)
+
+        current_dict = {}
+        for idx in benign_idx:
+            current_dict[chosen_clients[idx]] = benign_updates[idx]
+
+        aggregated_update = self.agg_avg(current_dict)
         return aggregated_update
 
     def agg_origin_alignins_clustering(self, agent_updates_dict, flat_global_model, current_round=None):
@@ -844,6 +978,143 @@ class Aggregation():
             current_dict[chosen_clients[idx]] = benign_updates[idx]
 
         aggregated_update = self.agg_avg(current_dict)
+        return aggregated_update
+
+    def agg_origin_alignins_clustering_weighted3(self, agent_updates_dict, flat_global_model, current_round=None):
+        local_updates = []
+        benign_id = []
+        malicious_id = []
+
+        for _id, update in agent_updates_dict.items():
+            local_updates.append(update)
+            if _id < self.args.num_corrupt:
+                malicious_id.append(_id)
+            else:
+                benign_id.append(_id)
+
+        chosen_clients = malicious_id + benign_id
+        num_chosen_clients = len(malicious_id + benign_id)
+        inter_model_updates = torch.stack(local_updates, dim=0)
+
+        tda_list = []
+        mpsa_list = []
+        grad_norm_list = []
+        mean_cos_list = []
+
+        major_sign = torch.sign(torch.sum(torch.sign(inter_model_updates), dim=0))
+        cos = torch.nn.CosineSimilarity(dim=0, eps=1e-6)
+        mean_update = torch.mean(inter_model_updates, dim=0)
+
+        for i in range(len(inter_model_updates)):
+            _, init_indices = torch.topk(torch.abs(inter_model_updates[i]), int(len(inter_model_updates[i]) * self.args.sparsity))
+
+            mpsa_list.append((torch.sum(torch.sign(inter_model_updates[i][init_indices]) == major_sign[init_indices]) / torch.numel(inter_model_updates[i][init_indices])).item())
+
+            tda_list.append(cos(inter_model_updates[i], flat_global_model).item())
+            grad_norm_list.append(torch.norm(inter_model_updates[i]).item())
+            mean_cos_list.append(cos(inter_model_updates[i], mean_update).item())
+
+        logging.info(f'Round {current_round} TDA: %s' % [round(i, 4) for i in tda_list])
+        logging.info(f'Round {current_round} MPSA: %s' % [round(i, 4) for i in mpsa_list])
+        logging.info(f'Round {current_round} Grad Norm: %s' % [round(i, 4) for i in grad_norm_list])
+        logging.info(f'Round {current_round} Mean Cos: %s' % [round(i, 4) for i in mean_cos_list])
+
+        mpsa_std = np.std(mpsa_list)
+        mpsa_med = np.median(mpsa_list)
+        mzscore_mpsa = [(np.abs(x - mpsa_med) / (mpsa_std + 1e-6)) for x in mpsa_list]
+        logging.info(f'Round {current_round} MZ-score of MPSA: %s' % [round(i, 4) for i in mzscore_mpsa])
+
+        tda_std = np.std(tda_list)
+        tda_med = np.median(tda_list)
+        mzscore_tda = [(np.abs(x - tda_med) / (tda_std + 1e-6)) for x in tda_list]
+        logging.info(f'Round {current_round} MZ-score of TDA: %s' % [round(i, 4) for i in mzscore_tda])
+
+        grad_norm_std = np.std(grad_norm_list)
+        grad_norm_med = np.median(grad_norm_list)
+        mzscore_grad_norm = [(np.abs(x - grad_norm_med) / (grad_norm_std + 1e-6)) for x in grad_norm_list]
+        logging.info(f'Round {current_round} MZ-score of Grad Norm: %s' % [round(i, 4) for i in mzscore_grad_norm])
+
+        mean_cos_std = np.std(mean_cos_list)
+        mean_cos_med = np.median(mean_cos_list)
+        mzscore_mean_cos = [(np.abs(x - mean_cos_med) / (mean_cos_std + 1e-6)) for x in mean_cos_list]
+        logging.info(f'Round {current_round} MZ-score of Mean Cos: %s' % [round(i, 4) for i in mzscore_mean_cos])
+
+        if num_chosen_clients < 3:
+            benign_idx = [i for i in range(num_chosen_clients)]
+            suspicious_idx = []
+            malicious_idx = []
+        else:
+            features = np.array([mzscore_mpsa, mzscore_tda, mzscore_grad_norm, mzscore_mean_cos]).T
+            try:
+                kmeans = KMeans(n_clusters=3, random_state=42, n_init=10).fit(features)
+                labels = kmeans.labels_
+                cluster_scores = {}
+                for k in range(3):
+                    if np.sum(labels == k) == 0:
+                        cluster_scores[k] = float("inf")
+                    else:
+                        cluster_scores[k] = np.mean(np.linalg.norm(features[labels == k], axis=1))
+                ordered = sorted(cluster_scores.items(), key=lambda x: x[1])
+                benign_label = ordered[0][0]
+                suspicious_label = ordered[1][0]
+                malicious_label = ordered[2][0]
+                benign_idx = [i for i in range(num_chosen_clients) if labels[i] == benign_label]
+                suspicious_idx = [i for i in range(num_chosen_clients) if labels[i] == suspicious_label]
+                malicious_idx = [i for i in range(num_chosen_clients) if labels[i] == malicious_label]
+            except Exception as e:
+                logging.error(f"Clustering failed: {e}, falling back to keeping all as benign")
+                benign_idx = [i for i in range(num_chosen_clients)]
+                suspicious_idx = []
+                malicious_idx = []
+
+        if len(benign_idx) + len(suspicious_idx) + len(malicious_idx) == 0:
+            return torch.zeros_like(local_updates[0])
+
+        weights = [0.0 for _ in range(num_chosen_clients)]
+        for idx in benign_idx:
+            weights[idx] = 0.9
+        for idx in suspicious_idx:
+            weights[idx] = 0.6
+        for idx in malicious_idx:
+            weights[idx] = 0.3
+
+        weighted_updates = torch.zeros_like(local_updates[0])
+        total_weight = 0.0
+        for idx in range(num_chosen_clients):
+            client_id = chosen_clients[idx]
+            weight = weights[idx] * self.agent_data_sizes[client_id]
+            weighted_updates += weight * local_updates[idx]
+            total_weight += weight
+
+        if total_weight > 0:
+            aggregated_update = weighted_updates / total_weight
+        else:
+            aggregated_update = torch.zeros_like(local_updates[0])
+
+        selected_idx = benign_idx + suspicious_idx
+        correct = 0
+        for idx in selected_idx:
+            if idx >= len(malicious_id):
+                correct += 1
+
+        TPR = correct / len(benign_id) if len(benign_id) > 0 else 0
+
+        if len(malicious_id) == 0:
+            FPR = 0
+        else:
+            wrong = 0
+            for idx in selected_idx:
+                if idx < len(malicious_id):
+                    wrong += 1
+            FPR = wrong / len(malicious_id)
+
+        logging.info('benign update index:   %s' % str(benign_id))
+        logging.info('selected benign idx:   %s' % str(benign_idx))
+        logging.info('selected suspicious idx: %s' % str(suspicious_idx))
+        logging.info('selected malicious idx:  %s' % str(malicious_idx))
+        logging.info('FPR:       %.4f'  % FPR)
+        logging.info('TPR:       %.4f' % TPR)
+
         return aggregated_update
 
     def agg_alignins_v(self, agent_updates_dict, flat_global_model, current_round=None):

@@ -118,6 +118,7 @@ if __name__ == "__main__":
             "alignins",
             "origin_alignins",
             "origin_alignins_4metrics",
+            "origin_alignins_4metrics_voting",
             "alignins_v",
             "alignins_g_v",
             "alignins_g_v2",
@@ -151,6 +152,7 @@ if __name__ == "__main__":
             "alignins_ims_standard",
             "ims_prune_finetune",
             "origin_alignins_clustering",
+            "origin_alignins_clustering_weighted3",
             "origin_alignins_clustering_prune_finetune",
         ],
         help="aggregation function to aggregate agents' local weights",
@@ -217,13 +219,9 @@ if __name__ == "__main__":
         args.exp_name_extra = "sp"
 
     per_data_dict = {
-        "rounds": {"fmnist": 50, "cifar10": 100, "cifar100": 100, "tinyimagenet": 50},
         "num_target": {"fmnist": 10, "cifar10": 10, "cifar100": 100, "tinyimagenet": 200,},
     }
 
-    if args.rounds == 150: # Default value in argparse
-        args.rounds = per_data_dict["rounds"][args.data]
-    
     args.num_target = per_data_dict["num_target"][args.data]
 
     args.log_dir = utils.setup_logging(args)
