@@ -180,6 +180,7 @@ if __name__ == "__main__":
     parser.add_argument("--lambda_c", type=float, default=1.0)
     parser.add_argument("--lambda_g", type=float, default=1.5)
     parser.add_argument("--lambda_mean_cos", type=float, default=1.5)
+    parser.add_argument("--cluster_imbalance_ratio", type=float, default=0.9)
     parser.add_argument("--suspicious_weight", type=float, default=0.5, help="Weight for suspicious clients in AlignIns")
     parser.add_argument("--benign_weight", type=float, default=1.0, help="Weight for benign clients in 3-way aggregation")
     parser.add_argument("--malicious_weight", type=float, default=0.0, help="Weight for malicious clients in 3-way aggregation")

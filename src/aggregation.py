@@ -1246,6 +1246,14 @@ class Aggregation():
                     0: [i for i in range(num_clients) if labels[i] == 0],
                     1: [i for i in range(num_clients) if labels[i] == 1],
                 }
+                cluster_sizes = [len(cluster_to_indices[0]), len(cluster_to_indices[1])]
+                max_ratio = max(cluster_sizes) / float(num_clients)
+                if max_ratio > self.args.cluster_imbalance_ratio:
+                    logging.info(
+                        "Gated2AuxClean skip round due to cluster imbalance: sizes=%s ratio=%.4f threshold=%.4f"
+                        % (cluster_sizes, max_ratio, self.args.cluster_imbalance_ratio)
+                    )
+                    return torch.zeros_like(flat_global_model)
 
                 def _agg_for_indices(idxs):
                     if len(idxs) == 0:
@@ -1480,46 +1488,89 @@ class Aggregation():
                 )
 
                 if aux_loader is not None:
-                    criterion = torch.nn.CrossEntropyLoss().to(self.args.device)
-
-                    def _eval_clean(update):
+                    def _eval_backdoor(update):
                         test_model = copy.deepcopy(global_model).to(self.args.device)
                         vector_to_model(
                             flat_global_model + update * self.server_lr, test_model
                         )
                         test_model.eval()
-                        total_loss = 0.0
                         total = 0
                         correct = 0
                         with torch.no_grad():
-                            for data, target in aux_loader:
-                                data = data.to(self.args.device)
-                                target = target.to(self.args.device)
-                                output = test_model(data)
-                                loss = criterion(output, target)
-                                bs = int(data.size(0))
-                                total_loss += float(loss.item()) * bs
-                                total += bs
+                            for data, _ in aux_loader:
+                                # apply backdoor trigger to entire batch
+                                poisoned_imgs = []
+                                for i in range(data.size(0)):
+                                    poisoned_imgs.append(
+                                        utils.add_pattern_bd(
+                                            copy.deepcopy(data[i]),
+                                            None,
+                                            self.args.data,
+                                            pattern_type=self.args.pattern_type,
+                                            agent_idx=0,
+                                            attack=self.args.attack,
+                                        )
+                                    )
+                                pdata = torch.stack(poisoned_imgs, dim=0).to(self.args.device)
+                                target = torch.full(
+                                    (pdata.size(0),), int(self.args.target_class), dtype=torch.long, device=self.args.device
+                                )
+                                output = test_model(pdata)
                                 pred = output.argmax(dim=1)
+                                bs = int(pdata.size(0))
+                                total += bs
                                 correct += int((pred == target).sum().item())
                         del test_model
                         if total == 0:
-                            return float("inf"), 0.0
-                        return total_loss / total, correct / total
+                            return 0.0
+                        # BD-Acc equals ASR under target-class labeling
+                        return correct / total
 
-                    upd0 = _agg_for_indices(cluster_to_indices[0])
-                    upd1 = _agg_for_indices(cluster_to_indices[1])
-                    c0_loss, c0_acc = _eval_clean(upd0)
-                    c1_loss, c1_acc = _eval_clean(upd1)
+                    # cluster imbalance check for 2 clusters
+                    cluster_sizes = [len(cluster_to_indices[k]) for k in [0, 1]]
+                    max_ratio = (max(cluster_sizes) / float(num_clients)) if num_clients > 0 else 1.0
+                    if max_ratio > self.args.cluster_imbalance_ratio:
+                        logging.info(
+                            "Gated2AuxBackdoor skip round due to cluster imbalance: sizes=%s ratio=%.4f threshold=%.4f"
+                            % (cluster_sizes, max_ratio, self.args.cluster_imbalance_ratio)
+                        )
+                        return torch.zeros_like(flat_global_model)
 
-                    key0 = (-c0_loss, c0_acc)
-                    key1 = (-c1_loss, c1_acc)
-                    benign_label = 0 if key0 >= key1 else 1
-                    suspicious_label = 1 - benign_label
+                    # evaluate each cluster: backdoor only
+                    cluster_updates = {
+                        0: _agg_for_indices(cluster_to_indices[0]),
+                        1: _agg_for_indices(cluster_to_indices[1]),
+                    }
+                    metrics = {}
+                    for k in [0, 1]:
+                        bd_acc_k = _eval_backdoor(cluster_updates[k])
+                        metrics[k] = {"bd_acc": bd_acc_k}
+                    logging.info(
+                        "Gated2AuxBackdoor cluster eval | "
+                        "C0: bd_acc=%.4f | C1: bd_acc=%.4f"
+                        % (
+                            metrics[0]["bd_acc"],
+                            metrics[1]["bd_acc"],
+                        )
+                    )
+                    # select cluster with minimum bd_acc (most robust to backdoor)
+                    ordered = sorted(metrics.items(), key=lambda kv: kv[1]["bd_acc"])
+                    best_label = ordered[0][0]
+                    second_label = ordered[1][0]
+                    delta = ordered[1][1]["bd_acc"] - ordered[0][1]["bd_acc"]
+                    if delta < getattr(self.args, "gated2_bd_delta_max", 0.02):
+                        logging.info(
+                            "Gated2AuxBackdoor skip round due to insignificant bd_acc gap: delta=%.4f threshold=%.4f"
+                            % (delta, getattr(self.args, "gated2_bd_delta_max", 0.02))
+                        )
+                        return torch.zeros_like(flat_global_model)
+                    benign_label = best_label
+                    # pick one suspicious label as the next best; remaining also suspicious
+                    suspicious_label = second_label
 
                     logging.info(
-                        "Gated2AuxClean cluster eval | C0: loss=%.6f acc=%.4f | C1: loss=%.6f acc=%.4f | benign=C%d"
-                        % (c0_loss, c0_acc, c1_loss, c1_acc, benign_label)
+                        "Gated2AuxBackdoor decision: benign=C%d (bd_acc=%.4f), second=%d (bd_acc=%.4f)"
+                        % (benign_label, metrics[benign_label]["bd_acc"], second_label, metrics[second_label]["bd_acc"])
                     )
                 else:
                     cluster_scores = {}
