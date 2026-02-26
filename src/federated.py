@@ -11,10 +11,11 @@ import torch
 import random
 from torch.utils.data import DataLoader
 import torch.nn as nn
-from torch.nn.utils import parameters_to_vector
+from torch.nn.utils import parameters_to_vector, vector_to_parameters
 import logging
 import argparse
 import os
+import sys
 import warnings
 
 warnings.filterwarnings("ignore")
@@ -153,8 +154,9 @@ if __name__ == "__main__":
             "ims_prune_finetune",
             "origin_alignins_clustering",
             "origin_alignins_clustering_weighted3",
-            "origin_alignins_clustering_gated2",
-            "origin_alignins_clustering_gated2_auxclean",
+            "origin_alignins_clustering_weighted3_dynamic",
+            "origin_alignins_clustering_weighted3_dynamic_softmax_gated",
+            "origin_alignins_clustering_weighted3_softmax_gated",
             "origin_alignins_clustering_prune_finetune",
         ],
         help="aggregation function to aggregate agents' local weights",
@@ -183,8 +185,6 @@ if __name__ == "__main__":
     parser.add_argument("--cluster_imbalance_ratio", type=float, default=0.9)
     parser.add_argument("--suspicious_weight", type=float, default=0.5, help="Weight for suspicious clients in AlignIns")
     parser.add_argument("--benign_weight", type=float, default=1.0, help="Weight for benign clients in 3-way aggregation")
-    parser.add_argument("--malicious_weight", type=float, default=0.0, help="Weight for malicious clients in 3-way aggregation")
-    parser.add_argument("--gated2_asr_delta_max", type=float, default=0.02, help="Max allowed ASR increase for choosing B+S in gated2")
     parser.add_argument("--gated2_bd_delta_max", type=float, default=0.02, help="Max allowed backdoor ACC drop for choosing B+S in gated2")
     parser.add_argument("--strict_factor", type=float, default=0.8, help="Factor for strict threshold in AlignIns (default: 0.8)")
     
@@ -214,6 +214,17 @@ if __name__ == "__main__":
     parser.add_argument('--aux_num_samples', type=int, default=1000, help='Auxiliary data sample size (default: 1000)')
     parser.add_argument("--resume", action="store_true", help="resume from checkpoint")
     parser.add_argument("--checkpoint_path", type=str, default="", help="path to checkpoint")
+    parser.add_argument(
+        "--prune_finetune_only",
+        action="store_true",
+        help="run IMS prune+finetune once from --checkpoint_path, then save and exit",
+    )
+    parser.add_argument(
+        "--output_checkpoint_path",
+        type=str,
+        default="",
+        help="where to save the pruned+finetuned checkpoint (default: derive from checkpoint_path)",
+    )
     parser.add_argument("--save_freq", type=int, default=10, help="save checkpoint frequency")
 
     args = parser.parse_args()
@@ -312,7 +323,7 @@ if __name__ == "__main__":
     # )
     auxiliary_data_loader = None
     auxiliary_data_loader_finetune = None
-    if args.aggr in {
+    if args.prune_finetune_only or args.aggr in {
         'alignins_plr',
         'ims',
         'ims_fast',
@@ -321,18 +332,18 @@ if __name__ == "__main__":
         'alignins_ims_standard',
         'alignins_ims_recover',
         'ims_prune_finetune',
+        'origin_alignins_clustering_weighted3_dynamic',
+        'origin_alignins_clustering_weighted3_dynamic_softmax_gated',
+        'origin_alignins_clustering_weighted3_softmax_gated',
         'origin_alignins_clustering_prune_finetune',
         'origin_alignins_clustering_gated2_auxclean',
         'a4fl',
         'a4fl_alignins',
     }:
-        # 先导入prepare_auxiliary_data函数
         from aggregation import Aggregation
         
-        # 创建一个临时的Aggregation实例来使用prepare_auxiliary_data函数
         temp_aggregator = Aggregation({}, 0, args)
         
-        # 准备辅助数据加载器
         logging.info("为PLR分析准备辅助数据...")
         auxiliary_data_loader = temp_aggregator.prepare_auxiliary_data(
             args=args,
@@ -342,10 +353,10 @@ if __name__ == "__main__":
         )
         
         if auxiliary_data_loader is None:
-            raise RuntimeError("辅助数据加载器创建失败，无法继续训练")
-        logging.info("成功创建辅助数据加载器")
+            logging.warning("无法创建辅助数据加载器，PLR分析可能无法正常工作")
+        else:
+            logging.info("成功创建辅助数据加载器")
             
-        auxiliary_data_loader_finetune = None
         if args.aggr in {'ims_prune_finetune', 'origin_alignins_clustering_prune_finetune', 'origin_alignins_clustering_gated2_auxclean'}:
             logging.info("Generating separate auxiliary data for fine-tuning...")
             auxiliary_data_loader_finetune = temp_aggregator.prepare_auxiliary_data(
@@ -355,14 +366,74 @@ if __name__ == "__main__":
                 val_dataset=val_dataset
             )
             if auxiliary_data_loader_finetune is None:
-                raise RuntimeError("微调辅助数据加载器创建失败，无法继续训练")
-            logging.info("Successfully created auxiliary data loader for fine-tuning")
+                logging.warning("Failed to create auxiliary data loader for fine-tuning")
+            else:
+                logging.info("Successfully created auxiliary data loader for fine-tuning")
             
-        # 删除临时聚合器，防止内存泄漏
         del temp_aggregator
 
     # initialize a model, and the agents
     global_model = models.get_model(args.data, args).to(args.device)
+
+    if args.prune_finetune_only:
+        if not args.checkpoint_path:
+            raise ValueError("--checkpoint_path is required when --prune_finetune_only is set")
+
+        checkpoint = torch.load(args.checkpoint_path, map_location=args.device)
+        state_dict = checkpoint["state_dict"] if isinstance(checkpoint, dict) and "state_dict" in checkpoint else checkpoint
+        global_model.load_state_dict(state_dict)
+
+        args.ims_start_round = 0
+
+        from agg_ims_prune import IMSPruneAggregator
+
+        pruner = IMSPruneAggregator(args, args.device)
+        flat = parameters_to_vector(global_model.parameters()).detach()
+        zero = torch.zeros_like(flat)
+
+        effective_update = pruner.aggregate(
+            agent_updates_dict={0: zero},
+            flat_global_model=flat,
+            global_model=global_model,
+            auxiliary_data_loader=auxiliary_data_loader,
+            initial_update=zero,
+            current_round=0,
+            auxiliary_data_loader_finetune=auxiliary_data_loader_finetune,
+            val_loader=val_loader,
+            poisoned_val_loader=poisoned_val_loader,
+            poisoned_val_only_x_loader=poisoned_val_only_x_loader,
+        )
+
+        old_params = parameters_to_vector(global_model.parameters()).detach()
+        new_params = (old_params + args.server_lr * effective_update).detach()
+        vector_to_parameters(new_params, global_model.parameters())
+
+        criterion = nn.CrossEntropyLoss().to(args.device)
+        logging.info("---------Test After IMS Prune + Finetune (Standalone) ------------")
+        val_acc = utils.get_loss_n_accuracy(global_model, criterion, val_loader, args, 0, args.num_target)
+        asr = utils.get_loss_n_accuracy(global_model, criterion, poisoned_val_loader, args, 0, num_classes=args.num_target)
+        ba = utils.get_loss_n_accuracy(global_model, criterion, poisoned_val_only_x_loader, args, 0, args.num_target)
+        logging.info("Clean ACC:              %.4f" % val_acc)
+        logging.info("Attack Success Ratio:   %.4f" % asr)
+        logging.info("Backdoor ACC:           %.4f" % ba)
+
+        if args.output_checkpoint_path:
+            out_path = args.output_checkpoint_path
+        else:
+            root, ext = os.path.splitext(args.checkpoint_path)
+            ext = ext if ext else ".pt"
+            out_path = f"{root}_imsprune_ft_ep{getattr(args, 'not_finetune_local_ep', 0)}{ext}"
+
+        save_dict = {
+            "round": 0,
+            "state_dict": global_model.state_dict(),
+            "source_checkpoint": args.checkpoint_path,
+            "mode": "prune_finetune_only",
+        }
+        os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+        torch.save(save_dict, out_path)
+        logging.info(f"Saved pruned+finetuned checkpoint to {out_path}")
+        sys.exit(0)
 
     global_mask = {}
     neurotoxin_mask = {}
