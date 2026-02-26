@@ -149,6 +149,10 @@ class IMSPruneAggregator(IMSAggregator):
         # Hyperparameters for fine-tuning (reuse NoT config or default)
         epochs = getattr(self.args, 'not_finetune_local_ep', 2)
         lr = getattr(self.args, 'not_finetune_lr', 0.001)
+        patience = int(getattr(self.args, 'not_finetune_patience', 2))
+        score_w_clean = float(getattr(self.args, 'not_score_w_clean', 1.0))
+        score_w_backdoor = float(getattr(self.args, 'not_score_w_backdoor', 1.0))
+        score_w_asr = float(getattr(self.args, 'not_score_w_asr', 1.0))
         
         # Enable gradients for fine-tuning
         # Use eval mode to freeze BatchNorm stats and disable Dropout, as we have limited data
@@ -165,6 +169,13 @@ class IMSPruneAggregator(IMSAggregator):
         criterion = nn.CrossEntropyLoss()
         
         masked_modules = dict(model.named_modules())
+        best_state = None
+        best_score = None
+        best_epoch = None
+        best_clean = None
+        best_asr = None
+        best_ba = None
+        no_improve = 0
         
         for ep in range(epochs):
             total_loss = 0
@@ -194,7 +205,7 @@ class IMSPruneAggregator(IMSAggregator):
                 total_loss += loss.item()
                 idx += 1
             
-            logging.info(f"IMS Prune FT Epoch {ep+1}/{epochs}, Loss: {total_loss/idx:.4f}")
+            logging.info(f"IMS Prune FT Epoch {ep+1}/{epochs}, Loss: {total_loss/max(idx, 1):.4f}")
             
             # Test after each fine-tuning epoch if loaders are provided
             if val_loader is not None and poisoned_val_loader is not None:
@@ -204,9 +215,33 @@ class IMSPruneAggregator(IMSAggregator):
                 logging.info(f"FT Epoch {ep+1} Clean ACC: {clean_acc:.4f}")
                 logging.info(f"FT Epoch {ep+1} Attack Success Ratio: {asr:.4f}")
                 
+                ba = 0.0
                 if poisoned_val_only_x_loader is not None:
                     ba = utils.get_loss_n_accuracy(model, criterion, poisoned_val_only_x_loader, self.args, 0, num_classes=self.args.num_target)
                     logging.info(f"FT Epoch {ep+1} Backdoor ACC: {ba:.4f}")
+
+                score = score_w_clean * clean_acc + score_w_backdoor * ba - score_w_asr * asr
+                if best_score is None or score > best_score:
+                    best_score = score
+                    best_state = copy.deepcopy(model.state_dict())
+                    best_epoch = ep + 1
+                    best_clean = float(clean_acc)
+                    best_asr = float(asr)
+                    best_ba = float(ba)
+                    no_improve = 0
+                else:
+                    no_improve += 1
+
+                if patience > 0 and no_improve >= patience:
+                    break
+
+        if best_state is not None:
+            model.load_state_dict(best_state)
+            if best_epoch is not None:
+                logging.info(
+                    "IMS Prune: Selected best FT epoch %s (Clean=%.4f, ASR=%.4f, Backdoor=%.4f, Score=%.4f)"
+                    % (best_epoch, best_clean, best_asr, best_ba, best_score)
+                )
 
 def agg_ims_prune_finetune(agent_updates_dict, flat_global_model, global_model, args, auxiliary_data_loader, current_round=None, initial_update=None, auxiliary_data_loader_finetune=None):
     aggregator = IMSPruneAggregator(args, args.device)

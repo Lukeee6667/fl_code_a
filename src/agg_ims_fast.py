@@ -77,6 +77,23 @@ class IMSAggregator:
         self.clean_agree_weight = getattr(args, 'ims_clean_agree_weight', 1.0)
         self.backdoor_recover_weight = getattr(args, 'ims_backdoor_recover_weight', 1.0)
         self.poison_entropy_weight = getattr(args, 'ims_poison_entropy_weight', 0.0)
+        self.adaptive = bool(getattr(args, 'ims_adaptive', False))
+        self.adapt_r1_min_epochs = int(getattr(args, 'ims_adapt_r1_min_epochs', 5))
+        self.adapt_r1_tol = float(getattr(args, 'ims_adapt_r1_tol', 1e-4))
+        self.adapt_r1_patience = int(getattr(args, 'ims_adapt_r1_patience', 3))
+        self.adapt_r1_mask_tol = float(getattr(args, 'ims_adapt_r1_mask_tol', 1e-4))
+        self.adapt_r1_mask_patience = int(getattr(args, 'ims_adapt_r1_mask_patience', 2))
+
+        self.adapt_r2_min_epochs = int(getattr(args, 'ims_adapt_r2_min_epochs', 5))
+        self.adapt_r2_tol = float(getattr(args, 'ims_adapt_r2_tol', 1e-4))
+        self.adapt_r2_patience = int(getattr(args, 'ims_adapt_r2_patience', 3))
+        self.adapt_r2_mask_tol = float(getattr(args, 'ims_adapt_r2_mask_tol', 1e-4))
+        self.adapt_r2_mask_patience = int(getattr(args, 'ims_adapt_r2_mask_patience', 2))
+
+        self.adapt_r3_min_steps = int(getattr(args, 'ims_adapt_r3_min_steps', 1))
+        self.adapt_r3_tol = float(getattr(args, 'ims_adapt_r3_tol', 1e-4))
+        self.adapt_r3_patience = int(getattr(args, 'ims_adapt_r3_patience', 2))
+        self.adapt_r3_saturation_ratio = float(getattr(args, 'ims_adapt_r3_saturation_ratio', 0.98))
         
     def _get_prunable_layers(self, model):
         layers = []
@@ -133,6 +150,11 @@ class IMSAggregator:
         # Optimization: Cache clean outputs
         clean_outputs_cache = {} 
         
+        best_epoch_loss = None
+        loss_plateau_count = 0
+        prev_a_prime = None
+        mask_stable_count = 0
+
         for epoch in range(self.r1):
             total_loss = 0.0
             num_batches = 0
@@ -184,8 +206,43 @@ class IMSAggregator:
                 total_loss += batch_loss.item()
                 num_batches += 1
             
+            epoch_loss = total_loss / max(num_batches, 1)
             if (epoch + 1) % 5 == 0:
                 logging.info(f"IMS Fast Init Epoch {epoch+1}/{self.r1}, Loss: {total_loss/num_batches:.4f}")
+
+            if self.adaptive:
+                if best_epoch_loss is None:
+                    best_epoch_loss = epoch_loss
+                else:
+                    improvement = best_epoch_loss - epoch_loss
+                    if improvement > self.adapt_r1_tol:
+                        best_epoch_loss = epoch_loss
+                        loss_plateau_count = 0
+                    else:
+                        loss_plateau_count += 1
+
+                with torch.no_grad():
+                    a_prime, _ = self.compute_mask_and_inverse(A_init, S_init, self.k)
+                    if prev_a_prime is not None:
+                        total_diff = 0.0
+                        total_elems = 0
+                        for cur, prev in zip(a_prime, prev_a_prime):
+                            total_diff += torch.mean(torch.abs(cur.detach() - prev.detach())).item()
+                            total_elems += 1
+                        avg_diff = total_diff / max(total_elems, 1)
+                        if avg_diff < self.adapt_r1_mask_tol:
+                            mask_stable_count += 1
+                        else:
+                            mask_stable_count = 0
+                    prev_a_prime = [m.detach().clone() for m in a_prime]
+
+                if (epoch + 1) >= self.adapt_r1_min_epochs:
+                    if loss_plateau_count >= self.adapt_r1_patience or mask_stable_count >= self.adapt_r1_mask_patience:
+                        logging.info(
+                            f"IMS Adaptive: early-stopped r1 at epoch {epoch+1}/{self.r1} "
+                            f"(loss_plateau={loss_plateau_count}, mask_stable={mask_stable_count})"
+                        )
+                        break
                 
         return [a.detach() for a in A_init], [s.detach() for s in S_init]
 
@@ -236,7 +293,9 @@ class IMSAggregator:
             with torch.no_grad():
                 p = torch.softmax(model(x), dim=1)
             
-            for _ in range(self.r3):
+            best_delta_loss = None
+            plateau_count = 0
+            for step_idx in range(self.r3):
                 x_hat = torch.clamp(x + delta, 0, 1)
                 
                 p_hat = torch.softmax(model(x_hat), dim=1)
@@ -253,6 +312,24 @@ class IMSAggregator:
                 
                 with torch.no_grad():
                     delta.clamp_(-self.epsilon, self.epsilon)
+
+                if self.adaptive:
+                    cur_loss = float(delta_loss.detach().item())
+                    if best_delta_loss is None:
+                        best_delta_loss = cur_loss
+                    else:
+                        improvement = best_delta_loss - cur_loss
+                        if improvement > self.adapt_r3_tol:
+                            best_delta_loss = cur_loss
+                            plateau_count = 0
+                        else:
+                            plateau_count += 1
+
+                    with torch.no_grad():
+                        saturation = (delta.detach().abs() >= (self.epsilon * 0.999)).float().mean().item()
+                    if (step_idx + 1) >= self.adapt_r3_min_steps:
+                        if plateau_count >= self.adapt_r3_patience or saturation >= self.adapt_r3_saturation_ratio:
+                            break
             
             delta_list.append(delta.detach().cpu())
             
@@ -269,6 +346,10 @@ class IMSAggregator:
         current_lambda = self.lambda_init
         
         clean_outputs_cache = {}
+        best_epoch_loss = None
+        loss_plateau_count = 0
+        prev_a_prime = None
+        mask_stable_count = 0
         
         for epoch in range(self.r2):
             total_loss = 0.0
@@ -345,6 +426,41 @@ class IMSAggregator:
             current_lambda = min(current_lambda + lambda_step, self.lambda_final)
             if (epoch + 1) % 5 == 0:
                 logging.info(f"IMS Fast Outer Epoch {epoch+1}/{self.r2}, Loss: {total_loss/batch_idx:.4f}, Lambda: {current_lambda:.2f}")
+
+            if self.adaptive:
+                epoch_loss = total_loss / max(batch_idx, 1)
+                if best_epoch_loss is None:
+                    best_epoch_loss = epoch_loss
+                else:
+                    improvement = best_epoch_loss - epoch_loss
+                    if improvement > self.adapt_r2_tol:
+                        best_epoch_loss = epoch_loss
+                        loss_plateau_count = 0
+                    else:
+                        loss_plateau_count += 1
+
+                with torch.no_grad():
+                    a_prime, _ = self.compute_mask_and_inverse(A_final, S_final, self.k)
+                    if prev_a_prime is not None:
+                        total_diff = 0.0
+                        total_elems = 0
+                        for cur, prev in zip(a_prime, prev_a_prime):
+                            total_diff += torch.mean(torch.abs(cur.detach() - prev.detach())).item()
+                            total_elems += 1
+                        avg_diff = total_diff / max(total_elems, 1)
+                        if avg_diff < self.adapt_r2_mask_tol:
+                            mask_stable_count += 1
+                        else:
+                            mask_stable_count = 0
+                    prev_a_prime = [m.detach().clone() for m in a_prime]
+
+                if (epoch + 1) >= self.adapt_r2_min_epochs:
+                    if loss_plateau_count >= self.adapt_r2_patience or mask_stable_count >= self.adapt_r2_mask_patience:
+                        logging.info(
+                            f"IMS Adaptive: early-stopped r2 at epoch {epoch+1}/{self.r2} "
+                            f"(loss_plateau={loss_plateau_count}, mask_stable={mask_stable_count})"
+                        )
+                        break
                 
         return [a.detach() for a in A_final], [s.detach() for s in S_final]
 

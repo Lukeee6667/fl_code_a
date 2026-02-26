@@ -33,18 +33,8 @@ class Aggregation():
             self.auxiliary_data_loader = self.prepare_auxiliary_data()
         else:
             self.auxiliary_data_loader = None
-        if self.args.aggr == 'a4fl':
-            self.a4fl_aggregator = A4FL_Aggregator(
-                n_params=self.n_params,
-                device=self.args.device,
-                n_clients=self.args.num_agents,
-                gamma=self.args.a4fl_gamma,
-                lr_p=self.args.a4fl_lr_p,
-                lr_h=self.args.a4fl_lr_h,
-                dual_update_interval=self.args.a4fl_dual_interval,
-                min_p=self.args.a4fl_min_p,
-                decay_factor=self.args.a4fl_decay
-            )
+        if self.args.aggr == "a4fl":
+            self.a4fl_aggregator = A4FL_Aggregator(self.args)
         
         # Initialize IMSPruneAggregator placeholder
         self.ims_prune_aggregator = None
@@ -159,8 +149,10 @@ class Aggregation():
             aggregated_updates = self.agg_foolsgold(agent_updates_dict)
         elif self.args.aggr == 'fltrust':
             aggregated_updates = self.agg_fltrust(agent_updates_dict)
-        elif self.args.aggr == 'a4fl':
-            aggregated_updates = self.agg_a4fl(agent_updates_dict, current_round)
+        elif self.args.aggr == "a4fl":
+            aggregated_updates = self.agg_a4fl(agent_updates_dict, global_model, auxiliary_data_loader, current_round)
+        elif self.args.aggr == 'fedup_avg':
+            aggregated_updates = self.agg_avg(agent_updates_dict)
         
         elif self.args.aggr == 'alignins':
             aggregated_updates = self.agg_alignins(agent_updates_dict, cur_global_params)
@@ -226,6 +218,18 @@ class Aggregation():
                 val_loader=val_loader,
                 poisoned_val_loader=poisoned_val_loader,
                 poisoned_val_only_x_loader=poisoned_val_only_x_loader
+            )
+        elif self.args.aggr == 'origin_alignins_clustering_prune_finetune_adaptive':
+            aggregated_updates = self.agg_origin_alignins_clustering_prune_finetune(
+                agent_updates_dict,
+                cur_global_params,
+                global_model,
+                auxiliary_data_loader,
+                current_round=current_round,
+                auxiliary_data_loader_finetune=auxiliary_data_loader_finetune,
+                val_loader=val_loader,
+                poisoned_val_loader=poisoned_val_loader,
+                poisoned_val_only_x_loader=poisoned_val_only_x_loader,
             )
             
         neurotoxin_mask = None
@@ -472,24 +476,14 @@ class Aggregation():
         # If not, fall back to Avg.
         return self.agg_avg(agent_updates_dict)
 
-    def agg_a4fl(self, agent_updates_dict, current_round):
-        # 转换输入格式为A4FL需要的格式
-        # A4FL通常需要每个客户端的参数列表（tensor列表）
-        # 这里agent_updates_dict是展平的向量
-        
-        updates_list = []
-        client_ids = []
-        for cid, update in agent_updates_dict.items():
-            client_ids.append(cid)
-            updates_list.append(update)
-            
-        # A4FL聚合
-        aggregated_update, self.detected_target_clients = self.a4fl_aggregator.aggregate(
-            updates_list, 
-            client_ids,
-            current_round
+    def agg_a4fl(self, agent_updates_dict, global_model, auxiliary_data_loader, current_round):
+        aggregated_update, detected = self.a4fl_aggregator.aggregate(
+            agent_updates_dict,
+            global_model,
+            auxiliary_data_loader,
+            self.agent_data_sizes,
         )
-        
+        self.detected_target_clients = detected or set()
         return aggregated_update
 
     def agg_alignins(self, agent_updates_dict, flat_global_model):

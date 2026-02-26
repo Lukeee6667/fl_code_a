@@ -29,6 +29,106 @@ if __name__ == "__main__":
     random.seed(0)
     torch.backends.cudnn.deterministic = True
 
+    def run_not_unlearning(global_model, args, criterion, val_loader, poisoned_val_loader, poisoned_val_only_x_loader, neurotoxin_mask=None):
+        logging.info("NoT Unlearning: Starting one-shot unlearning...")
+
+        target_name = None
+        for name, _ in global_model.named_parameters():
+            if ("conv" in name.lower()) and ("weight" in name.lower()):
+                target_name = name
+                break
+        if target_name is None:
+            for name, _ in global_model.named_parameters():
+                target_name = name
+                break
+
+        if target_name:
+            logging.info("NoT Unlearning: Negating layer '%s'" % target_name)
+            for name, param in global_model.named_parameters():
+                if name == target_name:
+                    param.data = -param.data
+                    break
+        else:
+            logging.warning("NoT Unlearning: No suitable layer found for negation!")
+
+        if args.not_finetune_rounds <= 0:
+            args.not_finetune_rounds = 5
+
+        logging.info("NoT Unlearning: Starting fine-tuning for %d rounds..." % args.not_finetune_rounds)
+
+        orig_lr = args.client_lr
+        orig_local_ep = args.local_ep
+
+        args.client_lr = args.not_finetune_lr
+        args.local_ep = args.not_finetune_local_ep
+
+        logging.info("NoT Unlearning: Reloading clean dataset for fine-tuning...")
+        clean_train_dataset, _ = utils.get_datasets(args.data)
+
+        full_train_loader = DataLoader(
+            clean_train_dataset,
+            batch_size=args.bs,
+            shuffle=True,
+            num_workers=args.num_workers,
+            pin_memory=False,
+            drop_last=True,
+        )
+        logging.info("NoT Unlearning: Fine-tuning using full training dataset.")
+
+        dummy_agent = Agent(
+            id=args.num_agents,
+            args=args,
+            train_dataset=clean_train_dataset,
+            data_idxs=list(range(len(clean_train_dataset))),
+            backdoor_train_dataset=None,
+        )
+        dummy_agent.train_loader = full_train_loader
+        dummy_agent.n_data = len(clean_train_dataset)
+        dummy_agent.is_malicious = 0
+
+        for ft_rnd in range(1, args.not_finetune_rounds + 1):
+            logging.info("NoT Unlearning: Starting fine-tuning round %d..." % ft_rnd)
+            update = dummy_agent.local_train(
+                global_model, criterion, ft_rnd, neurotoxin_mask=neurotoxin_mask or {}
+            )
+
+            cur_params = parameters_to_vector(
+                [global_model.state_dict()[name] for name in global_model.state_dict()]
+            )
+            lr_vec = torch.tensor([args.server_lr] * len(cur_params), device=args.device)
+            new_params = (cur_params + lr_vec * update).float()
+            utils.vector_to_model(new_params, global_model)
+            logging.info("NoT Unlearning: Fine-tuning round %d completed" % ft_rnd)
+
+        args.client_lr = orig_lr
+        args.local_ep = orig_local_ep
+
+        logging.info("---------Test After NoT Unlearning ------------")
+        val_acc = utils.get_loss_n_accuracy(
+            global_model, criterion, val_loader, args, args.rounds + args.not_finetune_rounds, args.num_target
+        )
+        asr = utils.get_loss_n_accuracy(
+            global_model,
+            criterion,
+            poisoned_val_loader,
+            args,
+            args.rounds + args.not_finetune_rounds,
+            num_classes=args.num_target,
+        )
+        poison_acc = utils.get_loss_n_accuracy(
+            global_model,
+            criterion,
+            poisoned_val_only_x_loader,
+            args,
+            args.rounds + args.not_finetune_rounds,
+            args.num_target,
+        )
+        logging.info("Post-Unlearning Clean ACC:            %.4f" % val_acc)
+        logging.info("Post-Unlearning Attack Success Ratio: %.4f" % asr)
+        logging.info("Post-Unlearning Backdoor ACC:         %.4f" % poison_acc)
+
+        return val_acc, asr, poison_acc
+
     parser = argparse.ArgumentParser(description="pass in a parameter")
 
     parser.add_argument(
@@ -139,9 +239,11 @@ if __name__ == "__main__":
             "foolsgold",
             "rfa",
             "fedup",
+            "fedup_avg",
             "alignins_fedup_hybrid",
             "alignins_fedup_correct",
             "not_unlearning",
+            "not_unlearning_from_ckpt",
             "alignins_not_unlearning",
             "alignins_ims",
             "ims",
@@ -158,6 +260,7 @@ if __name__ == "__main__":
             "origin_alignins_clustering_weighted3_dynamic_softmax_gated",
             "origin_alignins_clustering_weighted3_softmax_gated",
             "origin_alignins_clustering_prune_finetune",
+            "origin_alignins_clustering_prune_finetune_adaptive",
         ],
         help="aggregation function to aggregate agents' local weights",
     )
@@ -217,6 +320,21 @@ if __name__ == "__main__":
     parser.add_argument('--ims_epsilon', type=float, default=1.0, help='IMS perturbation constraint')
     parser.add_argument('--ims_clean_agree_weight', type=float, default=1.0, help='IMS clean agree loss weight')
     parser.add_argument('--ims_backdoor_recover_weight', type=float, default=1.0, help='IMS backdoor recover loss weight')
+    parser.add_argument('--ims_adaptive', action='store_true', help='enable adaptive early-stop for r1/r2/r3')
+    parser.add_argument('--ims_adapt_r1_min_epochs', type=int, default=5)
+    parser.add_argument('--ims_adapt_r1_tol', type=float, default=1e-4)
+    parser.add_argument('--ims_adapt_r1_patience', type=int, default=3)
+    parser.add_argument('--ims_adapt_r1_mask_tol', type=float, default=1e-4)
+    parser.add_argument('--ims_adapt_r1_mask_patience', type=int, default=2)
+    parser.add_argument('--ims_adapt_r2_min_epochs', type=int, default=5)
+    parser.add_argument('--ims_adapt_r2_tol', type=float, default=1e-4)
+    parser.add_argument('--ims_adapt_r2_patience', type=int, default=3)
+    parser.add_argument('--ims_adapt_r2_mask_tol', type=float, default=1e-4)
+    parser.add_argument('--ims_adapt_r2_mask_patience', type=int, default=2)
+    parser.add_argument('--ims_adapt_r3_min_steps', type=int, default=1)
+    parser.add_argument('--ims_adapt_r3_tol', type=float, default=1e-4)
+    parser.add_argument('--ims_adapt_r3_patience', type=int, default=2)
+    parser.add_argument('--ims_adapt_r3_saturation_ratio', type=float, default=0.98)
     parser.add_argument('--aux_num_samples', type=int, default=1000, help='Auxiliary data sample size (default: 1000)')
     parser.add_argument("--resume", action="store_true", help="resume from checkpoint")
     parser.add_argument("--checkpoint_path", type=str, default="", help="path to checkpoint")
@@ -234,6 +352,9 @@ if __name__ == "__main__":
     parser.add_argument("--save_freq", type=int, default=10, help="save checkpoint frequency")
 
     args = parser.parse_args()
+
+    if args.aggr == "origin_alignins_clustering_prune_finetune_adaptive":
+        args.ims_adaptive = True
 
     if args.clean:
         args.num_corrupt = 0
@@ -342,6 +463,7 @@ if __name__ == "__main__":
         'origin_alignins_clustering_weighted3_dynamic_softmax_gated',
         'origin_alignins_clustering_weighted3_softmax_gated',
         'origin_alignins_clustering_prune_finetune',
+        'origin_alignins_clustering_prune_finetune_adaptive',
         'origin_alignins_clustering_gated2_auxclean',
         'a4fl',
         'a4fl_alignins',
@@ -363,7 +485,12 @@ if __name__ == "__main__":
         else:
             logging.info("成功创建辅助数据加载器")
             
-        if args.aggr in {'ims_prune_finetune', 'origin_alignins_clustering_prune_finetune', 'origin_alignins_clustering_gated2_auxclean'}:
+        if args.aggr in {
+            'ims_prune_finetune',
+            'origin_alignins_clustering_prune_finetune',
+            'origin_alignins_clustering_prune_finetune_adaptive',
+            'origin_alignins_clustering_gated2_auxclean',
+        }:
             logging.info("Generating separate auxiliary data for fine-tuning...")
             auxiliary_data_loader_finetune = temp_aggregator.prepare_auxiliary_data(
                 args=args,
@@ -441,6 +568,43 @@ if __name__ == "__main__":
         logging.info(f"Saved pruned+finetuned checkpoint to {out_path}")
         sys.exit(0)
 
+    if args.aggr == "not_unlearning_from_ckpt":
+        if not args.checkpoint_path:
+            raise ValueError("--checkpoint_path is required when --aggr not_unlearning_from_ckpt")
+
+        checkpoint = torch.load(args.checkpoint_path, map_location=args.device)
+        state_dict = checkpoint["state_dict"] if isinstance(checkpoint, dict) and "state_dict" in checkpoint else checkpoint
+        global_model.load_state_dict(state_dict)
+
+        criterion = nn.CrossEntropyLoss().to(args.device)
+        run_not_unlearning(
+            global_model,
+            args,
+            criterion,
+            val_loader,
+            poisoned_val_loader,
+            poisoned_val_only_x_loader,
+            neurotoxin_mask={},
+        )
+
+        if args.output_checkpoint_path:
+            out_path = args.output_checkpoint_path
+        else:
+            root, ext = os.path.splitext(args.checkpoint_path)
+            ext = ext if ext else ".pt"
+            out_path = f"{root}_notunlearning_ft_ep{getattr(args, 'not_finetune_local_ep', 0)}{ext}"
+
+        save_dict = {
+            "round": 0,
+            "state_dict": global_model.state_dict(),
+            "source_checkpoint": args.checkpoint_path,
+            "mode": "not_unlearning_from_ckpt",
+        }
+        os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+        torch.save(save_dict, out_path)
+        logging.info(f"Saved unlearned checkpoint to {out_path}")
+        sys.exit(0)
+
     global_mask = {}
     neurotoxin_mask = {}
     updates_dict = {}
@@ -506,6 +670,9 @@ if __name__ == "__main__":
     best_asr = -1
     best_bcdr_acc = -1
     start_round = 1
+    fedup_last_global_params = None
+    fedup_last_updates = None
+    fedup_last_client_ids = None
 
     if args.resume and args.checkpoint_path:
         if os.path.isfile(args.checkpoint_path):
@@ -600,6 +767,11 @@ if __name__ == "__main__":
                 )
             agent_updates_dict[agent_id] = update
             utils.vector_to_model(copy.deepcopy(rnd_global_params), global_model)
+
+        if args.aggr == "fedup_avg" and rnd == args.rounds:
+            fedup_last_global_params = rnd_global_params.detach().cpu()
+            fedup_last_updates = {cid: up.detach().cpu() for cid, up in agent_updates_dict.items()}
+            fedup_last_client_ids = list(agent_updates_dict.keys())
 
         # aggregate params obtained by agents and update the global params
         updates_dict, neurotoxin_mask = aggregator.aggregate_updates(
@@ -718,10 +890,73 @@ if __name__ == "__main__":
                 logging.info("IMS Prune completed at round %d. Stopping further aggregation.", rnd)
                 break
 
+    if args.aggr == "fedup_avg":
+        logging.info("FedUP(avg): Starting post-training unlearning...")
+        if fedup_last_global_params is None or fedup_last_updates is None:
+            logging.warning("FedUP(avg): Missing cached last-round updates; skipping unlearning.")
+        else:
+            from fedup_unlearning import FedUPUnlearning
+
+            base_model = copy.deepcopy(global_model).to(args.device)
+            utils.vector_to_model(fedup_last_global_params.to(args.device), base_model)
+
+            local_models = {}
+            for cid, update in fedup_last_updates.items():
+                m = copy.deepcopy(base_model).to(args.device)
+                utils.vector_to_model((fedup_last_global_params + update).to(args.device), m)
+                local_models[cid] = m
+
+            malicious_ids = [cid for cid in local_models.keys() if cid < args.num_corrupt]
+            benign_ids = [cid for cid in local_models.keys() if cid >= args.num_corrupt]
+            if len(malicious_ids) == 0 or len(benign_ids) == 0:
+                logging.warning(f"FedUP(avg): Need both malicious and benign models, got mal={len(malicious_ids)} benign={len(benign_ids)}; skipping.")
+            else:
+                fedup = FedUPUnlearning(
+                    p_max=getattr(args, "fedup_p_max", 0.15),
+                    p_min=getattr(args, "fedup_p_min", 0.01),
+                    gamma=getattr(args, "fedup_gamma", 5),
+                    rate_limit_threshold=5,
+                )
+
+                mask = fedup.generate_unlearning_mask(
+                    local_models=local_models,
+                    global_model=base_model,
+                    malicious_client_ids=malicious_ids,
+                    benign_client_ids=benign_ids,
+                )
+
+                benign_models = [local_models[cid] for cid in benign_ids]
+                avg_benign_model = fedup._average_models(benign_models)
+
+                unlearned_model = fedup.apply_unlearning_mask(avg_benign_model, mask)
+                global_model.load_state_dict(unlearned_model.state_dict())
+
+                logging.info("---------Test After FedUP(avg) Unlearning ------------")
+                val_acc = utils.get_loss_n_accuracy(global_model, criterion, val_loader, args, args.rounds, args.num_target)
+                asr = utils.get_loss_n_accuracy(global_model, criterion, poisoned_val_loader, args, args.rounds, num_classes=args.num_target)
+                poison_acc = utils.get_loss_n_accuracy(global_model, criterion, poisoned_val_only_x_loader, args, args.rounds, args.num_target)
+                logging.info("Post-FedUP Clean ACC:              %.4f" % val_acc)
+                logging.info("Post-FedUP Attack Success Ratio:   %.4f" % asr)
+                logging.info("Post-FedUP Backdoor ACC:           %.4f" % poison_acc)
+
+                fedup_ckpt_path = os.path.join(args.log_dir, f"checkpoint_fedup_avg_unlearned_r{args.rounds}.pt")
+                torch.save(
+                    {
+                        "round": args.rounds,
+                        "state_dict": global_model.state_dict(),
+                        "best_acc": best_acc,
+                        "best_asr": best_asr,
+                        "best_bcdr_acc": best_bcdr_acc,
+                        "mode": "fedup_avg_post_unlearning",
+                    },
+                    fedup_ckpt_path,
+                )
+                logging.info(f"Saved FedUP(avg) unlearned checkpoint to {fedup_ckpt_path}")
+
     # ==========================================
     # NoT Unlearning Logic (Post-Training)
     # ==========================================
-    if args.aggr == "not_unlearning" or args.aggr == "alignins_not_unlearning":
+    if args.aggr in {"not_unlearning", "alignins_not_unlearning"}:
         logging.info("NoT Unlearning: Starting one-shot unlearning after training...")
         
         # 1. Negate the first conv layer
