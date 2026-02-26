@@ -183,6 +183,12 @@ if __name__ == "__main__":
     parser.add_argument("--lambda_g", type=float, default=1.5)
     parser.add_argument("--lambda_mean_cos", type=float, default=1.5)
     parser.add_argument("--cluster_imbalance_ratio", type=float, default=0.9)
+    parser.add_argument(
+        "--cluster_mz_metrics",
+        type=str,
+        default="mpsa,tda,grad_norm,mean_cos",
+        help="comma-separated MZ-score metrics for KMeans (mpsa,tda,grad_norm,mean_cos)",
+    )
     parser.add_argument("--suspicious_weight", type=float, default=0.5, help="Weight for suspicious clients in AlignIns")
     parser.add_argument("--benign_weight", type=float, default=1.0, help="Weight for benign clients in 3-way aggregation")
     parser.add_argument("--gated2_bd_delta_max", type=float, default=0.02, help="Max allowed backdoor ACC drop for choosing B+S in gated2")

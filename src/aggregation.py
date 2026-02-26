@@ -108,6 +108,35 @@ class Aggregation():
             pin_memory=False,
         )
 
+    def _build_mz_features(self, num_chosen_clients, mzscore_mpsa, mzscore_tda, mzscore_grad_norm, mzscore_mean_cos, current_round=None):
+        metric_map = {
+            "mpsa": mzscore_mpsa,
+            "tda": mzscore_tda,
+            "grad_norm": mzscore_grad_norm,
+            "mean_cos": mzscore_mean_cos,
+        }
+
+        raw = getattr(self.args, "cluster_mz_metrics", "mpsa,tda,grad_norm,mean_cos")
+        selected = [s.strip().lower() for s in str(raw).split(",") if s.strip()]
+        selected = [s for s in selected if s in metric_map]
+
+        if "mpsa" not in selected:
+            selected = ["mpsa"] + selected
+        if "tda" not in selected:
+            selected = ["tda"] + selected
+
+        seen = set()
+        selected = [s for s in selected if not (s in seen or seen.add(s))]
+
+        cols = [metric_map[s] for s in selected]
+        features = np.stack([np.asarray(c, dtype=np.float64) for c in cols], axis=1)
+
+        logging.info(f"Round {current_round} clustering MZ metrics: {selected} (dim={features.shape[1]})")
+        if features.shape[0] != num_chosen_clients:
+            raise ValueError(f"Feature rows {features.shape[0]} != num_chosen_clients {num_chosen_clients}")
+
+        return features
+
     def aggregate_updates(self, global_model, agent_updates_dict, auxiliary_data_loader, current_round=None, auxiliary_data_loader_finetune=None, val_loader=None, poisoned_val_loader=None, poisoned_val_only_x_loader=None):
         cur_global_params = parameters_to_vector([ global_model.state_dict()[name] for name in global_model.state_dict() ]).detach()
         if self.args.aggr == 'avg':
@@ -1244,7 +1273,7 @@ class Aggregation():
             suspicious_idx = []
             malicious_idx = []
         else:
-            features = np.array([mzscore_mpsa, mzscore_tda, mzscore_grad_norm, mzscore_mean_cos]).T
+            features = self._build_mz_features(num_chosen_clients, mzscore_mpsa, mzscore_tda, mzscore_grad_norm, mzscore_mean_cos, current_round=current_round)
             try:
                 kmeans = KMeans(n_clusters=3, random_state=42, n_init=10).fit(features)
                 labels = kmeans.labels_
@@ -1436,7 +1465,7 @@ class Aggregation():
             cluster_weights = {0: 1.0, 1: 0.0, 2: 0.0}
             benign_label, suspicious_label, malicious_label = 0, 1, 2
         else:
-            features = np.array([mzscore_mpsa, mzscore_tda, mzscore_grad_norm, mzscore_mean_cos]).T
+            features = self._build_mz_features(num_chosen_clients, mzscore_mpsa, mzscore_tda, mzscore_grad_norm, mzscore_mean_cos, current_round=current_round)
             try:
                 kmeans = KMeans(n_clusters=3, random_state=42, n_init=10).fit(features)
                 labels = kmeans.labels_
