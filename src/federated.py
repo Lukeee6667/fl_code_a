@@ -6,10 +6,9 @@ import copy
 import numpy as np
 from agent import Agent
 from agent_sparse import Agent as Agent_s
-from aggregation import Aggregation
 import torch
 import random
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 import torch.nn as nn
 from torch.nn.utils import parameters_to_vector, vector_to_parameters
 import logging
@@ -100,6 +99,20 @@ if __name__ == "__main__":
             utils.vector_to_model(new_params, global_model)
             logging.info("NoT Unlearning: Fine-tuning round %d completed" % ft_rnd)
 
+            logging.info(f"--------- Test After FT Round {ft_rnd} ------------")
+            clean_acc = utils.get_loss_n_accuracy(global_model, criterion, val_loader, args, ft_rnd, args.num_target)
+            logging.info(f"FT Round {ft_rnd} Clean ACC: {clean_acc:.4f}")
+            if poisoned_val_loader is not None:
+                asr = utils.get_loss_n_accuracy(
+                    global_model, criterion, poisoned_val_loader, args, ft_rnd, num_classes=args.num_target
+                )
+                logging.info(f"FT Round {ft_rnd} Attack Success Ratio: {asr:.4f}")
+            if poisoned_val_only_x_loader is not None:
+                ba = utils.get_loss_n_accuracy(
+                    global_model, criterion, poisoned_val_only_x_loader, args, ft_rnd, args.num_target
+                )
+                logging.info(f"FT Round {ft_rnd} Backdoor ACC: {ba:.4f}")
+
         args.client_lr = orig_lr
         args.local_ep = orig_local_ep
 
@@ -128,6 +141,78 @@ if __name__ == "__main__":
         logging.info("Post-Unlearning Backdoor ACC:         %.4f" % poison_acc)
 
         return val_acc, asr, poison_acc
+
+    def run_plain_finetune(global_model, args, criterion, val_loader, poisoned_val_loader, poisoned_val_only_x_loader):
+        ft_rounds = int(getattr(args, "ft_rounds", 1))
+        ft_local_ep = int(getattr(args, "ft_local_ep", 2))
+        ft_lr = float(getattr(args, "ft_lr", 0.0001))
+        ft_num_samples = int(getattr(args, "ft_num_samples", 0))
+        ft_data_frac = float(getattr(args, "ft_data_frac", 1.0))
+
+        if ft_rounds <= 0:
+            raise ValueError("--ft_rounds must be > 0")
+        if ft_local_ep <= 0:
+            raise ValueError("--ft_local_ep must be > 0")
+        if ft_data_frac <= 0:
+            raise ValueError("--ft_data_frac must be > 0")
+
+        logging.info("Finetune: Reloading clean dataset for fine-tuning...")
+        clean_train_dataset, _ = utils.get_datasets(args.data)
+        total_n = len(clean_train_dataset)
+        if ft_num_samples > 0:
+            use_n = min(ft_num_samples, total_n)
+        elif ft_data_frac < 1.0:
+            use_n = max(1, int(total_n * ft_data_frac))
+        else:
+            use_n = total_n
+        ft_indices = list(range(total_n)) if use_n >= total_n else np.random.choice(total_n, use_n, replace=False).tolist()
+        logging.info(f"Finetune: Using {len(ft_indices)}/{total_n} samples for fine-tuning.")
+
+        ft_dataset = clean_train_dataset if use_n >= total_n else Subset(clean_train_dataset, ft_indices)
+        ft_loader = DataLoader(
+            ft_dataset,
+            batch_size=args.bs,
+            shuffle=True,
+            num_workers=args.num_workers,
+            pin_memory=False,
+            drop_last=True,
+        )
+
+        global_model.train()
+        optimizer = torch.optim.SGD(
+            global_model.parameters(),
+            lr=ft_lr,
+            weight_decay=getattr(args, "wd", 0.0),
+            momentum=getattr(args, "momentum", 0.0),
+        )
+
+        for ft_rnd in range(1, ft_rounds + 1):
+            logging.info("Finetune: Starting fine-tuning round %d/%d..." % (ft_rnd, ft_rounds))
+            for _ in range(ft_local_ep):
+                for inputs, labels in ft_loader:
+                    optimizer.zero_grad()
+                    inputs = inputs.to(device=args.device, non_blocking=True)
+                    labels = labels.to(device=args.device, non_blocking=True)
+                    outputs = global_model(inputs)
+                    loss = criterion(outputs, labels)
+                    loss.backward()
+                    optimizer.step()
+
+            logging.info(f"--------- Test After FT Round {ft_rnd} ------------")
+            clean_acc = utils.get_loss_n_accuracy(global_model, criterion, val_loader, args, ft_rnd, args.num_target)
+            logging.info(f"FT Round {ft_rnd} Clean ACC: {clean_acc:.4f}")
+
+            if poisoned_val_loader is not None:
+                asr = utils.get_loss_n_accuracy(
+                    global_model, criterion, poisoned_val_loader, args, ft_rnd, num_classes=args.num_target
+                )
+                logging.info(f"FT Round {ft_rnd} Attack Success Ratio: {asr:.4f}")
+
+            if poisoned_val_only_x_loader is not None:
+                ba = utils.get_loss_n_accuracy(
+                    global_model, criterion, poisoned_val_only_x_loader, args, ft_rnd, args.num_target
+                )
+                logging.info(f"FT Round {ft_rnd} Backdoor ACC: {ba:.4f}")
 
     parser = argparse.ArgumentParser(description="pass in a parameter")
 
@@ -345,6 +430,16 @@ if __name__ == "__main__":
         help="run IMS prune+finetune once from --checkpoint_path, then save and exit",
     )
     parser.add_argument(
+        "--finetune_from_ckpt_only",
+        action="store_true",
+        help="run plain fine-tuning from --checkpoint_path, then save and exit",
+    )
+    parser.add_argument("--ft_rounds", type=int, default=1, help="fine-tuning rounds")
+    parser.add_argument("--ft_local_ep", type=int, default=2, help="local epochs per fine-tuning round")
+    parser.add_argument("--ft_lr", type=float, default=0.0001, help="fine-tuning learning rate")
+    parser.add_argument("--ft_num_samples", type=int, default=0, help="fine-tuning sample count (0 uses full dataset)")
+    parser.add_argument("--ft_data_frac", type=float, default=1.0, help="fine-tuning data fraction (<=0 invalid)")
+    parser.add_argument(
         "--output_checkpoint_path",
         type=str,
         default="",
@@ -513,7 +608,10 @@ if __name__ == "__main__":
         if not args.checkpoint_path:
             raise ValueError("--checkpoint_path is required when --prune_finetune_only is set")
 
-        checkpoint = torch.load(args.checkpoint_path, map_location=args.device)
+        try:
+            checkpoint = torch.load(args.checkpoint_path, map_location=args.device)
+        except Exception as e:
+            raise ValueError(f"Failed to load checkpoint_path='{args.checkpoint_path}'. Expect a torch .pt checkpoint.") from e
         state_dict = checkpoint["state_dict"] if isinstance(checkpoint, dict) and "state_dict" in checkpoint else checkpoint
         global_model.load_state_dict(state_dict)
 
@@ -569,11 +667,50 @@ if __name__ == "__main__":
         logging.info(f"Saved pruned+finetuned checkpoint to {out_path}")
         sys.exit(0)
 
+    if args.finetune_from_ckpt_only:
+        if not args.checkpoint_path:
+            raise ValueError("--checkpoint_path is required when --finetune_from_ckpt_only is set")
+
+        try:
+            checkpoint = torch.load(args.checkpoint_path, map_location=args.device)
+        except Exception as e:
+            raise ValueError(f"Failed to load checkpoint_path='{args.checkpoint_path}'. Expect a torch .pt checkpoint.") from e
+        state_dict = checkpoint["state_dict"] if isinstance(checkpoint, dict) and "state_dict" in checkpoint else checkpoint
+        global_model.load_state_dict(state_dict)
+
+        criterion = nn.CrossEntropyLoss().to(args.device)
+        run_plain_finetune(global_model, args, criterion, val_loader, poisoned_val_loader, poisoned_val_only_x_loader)
+
+        if args.output_checkpoint_path:
+            out_path = args.output_checkpoint_path
+        else:
+            root, ext = os.path.splitext(args.checkpoint_path)
+            ext = ext if ext else ".pt"
+            lr_tag = str(getattr(args, "ft_lr", 0.0)).replace(".", "p")
+            out_path = f"{root}_ft_r{getattr(args, 'ft_rounds', 0)}_ep{getattr(args, 'ft_local_ep', 0)}_lr{lr_tag}{ext}"
+
+        save_dict = {
+            "round": 0,
+            "state_dict": global_model.state_dict(),
+            "source_checkpoint": args.checkpoint_path,
+            "mode": "finetune_from_ckpt_only",
+            "ft_rounds": int(getattr(args, "ft_rounds", 0)),
+            "ft_local_ep": int(getattr(args, "ft_local_ep", 0)),
+            "ft_lr": float(getattr(args, "ft_lr", 0.0)),
+        }
+        os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+        torch.save(save_dict, out_path)
+        logging.info(f"Saved finetuned checkpoint to {out_path}")
+        sys.exit(0)
+
     if args.aggr == "not_unlearning_from_ckpt":
         if not args.checkpoint_path:
             raise ValueError("--checkpoint_path is required when --aggr not_unlearning_from_ckpt")
 
-        checkpoint = torch.load(args.checkpoint_path, map_location=args.device)
+        try:
+            checkpoint = torch.load(args.checkpoint_path, map_location=args.device)
+        except Exception as e:
+            raise ValueError(f"Failed to load checkpoint_path='{args.checkpoint_path}'. Expect a torch .pt checkpoint.") from e
         state_dict = checkpoint["state_dict"] if isinstance(checkpoint, dict) and "state_dict" in checkpoint else checkpoint
         global_model.load_state_dict(state_dict)
 
@@ -662,6 +799,7 @@ if __name__ == "__main__":
             )
         )
 
+    from aggregation import Aggregation
     aggregator = Aggregation(agent_data_sizes, n_model_params, args)
 
     criterion = nn.CrossEntropyLoss().to(args.device)
