@@ -267,6 +267,7 @@ if __name__ == "__main__":
     parser.add_argument("--not_finetune_rounds", type=int, default=0)
     parser.add_argument("--not_finetune_local_ep", type=int, default=2, help='Fine-tuning epochs (default: 2)')
     parser.add_argument("--not_finetune_lr", type=float, default=0.001, help='Fine-tuning learning rate (default: 0.001)')
+    parser.add_argument("--not_finetune_patience", type=int, default=2, help="Early-stopping patience for fine-tuning (<=0 disables)")
     parser.add_argument("--lr_decay", type=float, default=0.99)
     parser.add_argument("--momentum", type=float, default=0.0)
     parser.add_argument("--mask_init", type=str, default="ERK")
