@@ -60,29 +60,30 @@ if __name__ == "__main__":
 
         args.client_lr = args.not_finetune_lr
         args.local_ep = args.not_finetune_local_ep
+        not_ft_num_samples = int(getattr(args, "not_finetune_num_samples", 0))
+        not_ft_data_frac = float(getattr(args, "not_finetune_data_frac", 1.0))
+        if not_ft_data_frac <= 0:
+            raise ValueError("--not_finetune_data_frac must be > 0")
 
         logging.info("NoT Unlearning: Reloading clean dataset for fine-tuning...")
         clean_train_dataset, _ = utils.get_datasets(args.data)
-
-        full_train_loader = DataLoader(
-            clean_train_dataset,
-            batch_size=args.bs,
-            shuffle=True,
-            num_workers=args.num_workers,
-            pin_memory=False,
-            drop_last=True,
-        )
-        logging.info("NoT Unlearning: Fine-tuning using full training dataset.")
+        total_n = len(clean_train_dataset)
+        if not_ft_num_samples > 0:
+            use_n = min(not_ft_num_samples, total_n)
+        elif not_ft_data_frac < 1.0:
+            use_n = max(1, int(total_n * not_ft_data_frac))
+        else:
+            use_n = total_n
+        not_ft_indices = list(range(total_n)) if use_n >= total_n else np.random.choice(total_n, use_n, replace=False).tolist()
+        logging.info(f"NoT Unlearning: Fine-tuning using {len(not_ft_indices)}/{total_n} samples.")
 
         dummy_agent = Agent(
             id=args.num_agents,
             args=args,
             train_dataset=clean_train_dataset,
-            data_idxs=list(range(len(clean_train_dataset))),
+            data_idxs=not_ft_indices,
             backdoor_train_dataset=None,
         )
-        dummy_agent.train_loader = full_train_loader
-        dummy_agent.n_data = len(clean_train_dataset)
         dummy_agent.is_malicious = 0
 
         for ft_rnd in range(1, args.not_finetune_rounds + 1):
@@ -352,6 +353,8 @@ if __name__ == "__main__":
     parser.add_argument("--not_finetune_rounds", type=int, default=0)
     parser.add_argument("--not_finetune_local_ep", type=int, default=2, help='Fine-tuning epochs (default: 2)')
     parser.add_argument("--not_finetune_lr", type=float, default=0.001, help='Fine-tuning learning rate (default: 0.001)')
+    parser.add_argument("--not_finetune_num_samples", type=int, default=0, help="NoT fine-tuning sample count (0 uses full dataset)")
+    parser.add_argument("--not_finetune_data_frac", type=float, default=1.0, help="NoT fine-tuning data fraction (<=0 invalid)")
     parser.add_argument("--not_finetune_patience", type=int, default=2, help="Early-stopping patience for fine-tuning (<=0 disables)")
     parser.add_argument("--lr_decay", type=float, default=0.99)
     parser.add_argument("--momentum", type=float, default=0.0)
