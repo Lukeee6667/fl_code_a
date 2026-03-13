@@ -40,3 +40,6 @@ pic_7/
 
 # shell scripts
 *.sh
+
+# ckpt
+.pt

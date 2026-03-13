@@ -433,6 +433,11 @@ if __name__ == "__main__":
         help="run IMS prune+finetune once from --checkpoint_path, then save and exit",
     )
     parser.add_argument(
+        "--prune_plain_finetune_only",
+        action="store_true",
+        help="run IMS prune then plain fine-tuning (no constraint) once from --checkpoint_path, then save and exit",
+    )
+    parser.add_argument(
         "--finetune_from_ckpt_only",
         action="store_true",
         help="run plain fine-tuning from --checkpoint_path, then save and exit",
@@ -549,7 +554,7 @@ if __name__ == "__main__":
     # )
     auxiliary_data_loader = None
     auxiliary_data_loader_finetune = None
-    if args.prune_finetune_only or args.aggr in {
+    if args.prune_finetune_only or args.prune_plain_finetune_only or args.aggr in {
         'alignins_plr',
         'ims',
         'ims_fast',
@@ -668,6 +673,70 @@ if __name__ == "__main__":
         os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
         torch.save(save_dict, out_path)
         logging.info(f"Saved pruned+finetuned checkpoint to {out_path}")
+        sys.exit(0)
+
+    if args.prune_plain_finetune_only:
+        if not args.checkpoint_path:
+            raise ValueError("--checkpoint_path is required when --prune_plain_finetune_only is set")
+
+        try:
+            checkpoint = torch.load(args.checkpoint_path, map_location=args.device)
+        except Exception as e:
+            raise ValueError(f"Failed to load checkpoint_path='{args.checkpoint_path}'. Expect a torch .pt checkpoint.") from e
+        state_dict = checkpoint["state_dict"] if isinstance(checkpoint, dict) and "state_dict" in checkpoint else checkpoint
+        global_model.load_state_dict(state_dict)
+
+        args.ims_start_round = 0
+
+        from agg_ims_prune import IMSPruneAggregator
+
+        pruner = IMSPruneAggregator(args, args.device)
+        flat = parameters_to_vector(global_model.parameters()).detach()
+        zero = torch.zeros_like(flat)
+
+        effective_update = pruner.aggregate(
+            agent_updates_dict={0: zero},
+            flat_global_model=flat,
+            global_model=global_model,
+            auxiliary_data_loader=auxiliary_data_loader,
+            initial_update=zero,
+            current_round=0,
+            auxiliary_data_loader_finetune=auxiliary_data_loader_finetune,
+            val_loader=val_loader,
+            poisoned_val_loader=poisoned_val_loader,
+            poisoned_val_only_x_loader=poisoned_val_only_x_loader,
+            fine_tune_constrained=False,
+        )
+
+        old_params = parameters_to_vector(global_model.parameters()).detach()
+        new_params = (old_params + args.server_lr * effective_update).detach()
+        vector_to_parameters(new_params, global_model.parameters())
+
+        criterion = nn.CrossEntropyLoss().to(args.device)
+        logging.info("---------Test After IMS Prune + Plain Finetune (Standalone) ------------")
+        val_acc = utils.get_loss_n_accuracy(global_model, criterion, val_loader, args, 0, args.num_target)
+        asr = utils.get_loss_n_accuracy(global_model, criterion, poisoned_val_loader, args, 0, num_classes=args.num_target)
+        ba = utils.get_loss_n_accuracy(global_model, criterion, poisoned_val_only_x_loader, args, 0, args.num_target)
+        logging.info("Clean ACC:              %.4f" % val_acc)
+        logging.info("Attack Success Ratio:   %.4f" % asr)
+        logging.info("Backdoor ACC:           %.4f" % ba)
+
+        if args.output_checkpoint_path:
+            out_path = args.output_checkpoint_path
+        else:
+            root, ext = os.path.splitext(args.checkpoint_path)
+            ext = ext if ext else ".pt"
+            out_path = f"{root}_imsprune_plainft_ep{getattr(args, 'not_finetune_local_ep', 0)}{ext}"
+
+        save_dict = {
+            "round": 0,
+            "state_dict": global_model.state_dict(),
+            "source_checkpoint": args.checkpoint_path,
+            "mode": "prune_plain_finetune_only",
+        }
+        os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+        torch.save(save_dict, out_path)
+        logging.info(f"Saved pruned+plain-finetuned checkpoint to {out_path}")
         sys.exit(0)
 
     if args.finetune_from_ckpt_only:

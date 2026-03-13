@@ -21,7 +21,7 @@ class IMSPruneAggregator(IMSAggregator):
         self.saved_prunable_layers = None
         self.has_pruned = False
 
-    def aggregate(self, agent_updates_dict, flat_global_model, global_model, auxiliary_data_loader, initial_update=None, current_round=None, auxiliary_data_loader_finetune=None, val_loader=None, poisoned_val_loader=None, poisoned_val_only_x_loader=None):
+    def aggregate(self, agent_updates_dict, flat_global_model, global_model, auxiliary_data_loader, initial_update=None, current_round=None, auxiliary_data_loader_finetune=None, val_loader=None, poisoned_val_loader=None, poisoned_val_only_x_loader=None, fine_tune_constrained=True):
         start_round = getattr(self.args, 'ims_start_round', 100)
         
         if current_round is not None and current_round >= start_round:
@@ -129,7 +129,7 @@ class IMSPruneAggregator(IMSAggregator):
         # 5. Lightweight Fine-tuning with Interaction Constraint
         # Use separate loader if provided, else fallback to the one used for pruning
         ft_loader = auxiliary_data_loader_finetune if auxiliary_data_loader_finetune is not None else auxiliary_data_loader
-        self.fine_tune_model(pruned_model, ft_loader, A_final, S_final, prunable_layers, val_loader=val_loader, poisoned_val_loader=poisoned_val_loader, poisoned_val_only_x_loader=poisoned_val_only_x_loader)
+        self.fine_tune_model(pruned_model, ft_loader, A_final, S_final, prunable_layers, val_loader=val_loader, poisoned_val_loader=poisoned_val_loader, poisoned_val_only_x_loader=poisoned_val_only_x_loader, apply_constraint=fine_tune_constrained)
         
         # Test After Finetune
         # logging.info("---------Test After IMS Prune + Finetune ------------")
@@ -143,8 +143,11 @@ class IMSPruneAggregator(IMSAggregator):
         self.has_pruned = True
         return effective_update
 
-    def fine_tune_model(self, model, loader, A_final, S_final, prunable_layers, val_loader=None, poisoned_val_loader=None, poisoned_val_only_x_loader=None):
-        logging.info("IMS Prune: Starting lightweight fine-tuning...")
+    def fine_tune_model(self, model, loader, A_final, S_final, prunable_layers, val_loader=None, poisoned_val_loader=None, poisoned_val_only_x_loader=None, apply_constraint=True):
+        if apply_constraint:
+            logging.info("IMS Prune: Starting constrained fine-tuning...")
+        else:
+            logging.info("IMS Prune: Starting plain fine-tuning...")
         
         # Hyperparameters for fine-tuning (reuse NoT config or default)
         epochs = getattr(self.args, 'not_finetune_local_ep', 2)
@@ -162,13 +165,16 @@ class IMSPruneAggregator(IMSAggregator):
             
         # Compute masks for constraint (Interaction Constraint)
         # We use the computed masks to zero out gradients of pruned components
-        a_prime_list, _ = self.compute_mask_and_inverse(A_final, S_final, self.k)
-        masks = [m.detach() for m in a_prime_list]
+        if apply_constraint:
+            a_prime_list, _ = self.compute_mask_and_inverse(A_final, S_final, self.k)
+            masks = [m.detach() for m in a_prime_list]
+        else:
+            masks = None
         
         optimizer = optim.SGD(model.parameters(), lr=lr, momentum=0.9, weight_decay=1e-4)
         criterion = nn.CrossEntropyLoss()
         
-        masked_modules = dict(model.named_modules())
+        masked_modules = dict(model.named_modules()) if apply_constraint else None
         best_state = None
         best_score = None
         best_epoch = None
@@ -191,15 +197,16 @@ class IMSPruneAggregator(IMSAggregator):
                 # Forbid activation of pruned backdoor-related components.
                 # We enforce this by multiplying the gradient by the mask.
                 # If mask is close to 0 (pruned), gradient becomes 0, keeping the weight at 0.
-                with torch.no_grad():
-                    for i, layer_info in enumerate(prunable_layers):
-                        name = layer_info['name']
-                        module = masked_modules[name]
-                        mask = masks[i]
-                        reshaped_mask = mask.view(layer_info['shape'])
-                        
-                        if module.weight.grad is not None:
-                             module.weight.grad.data.mul_(reshaped_mask)
+                if apply_constraint:
+                    with torch.no_grad():
+                        for i, layer_info in enumerate(prunable_layers):
+                            name = layer_info['name']
+                            module = masked_modules[name]
+                            mask = masks[i]
+                            reshaped_mask = mask.view(layer_info['shape'])
+                            
+                            if module.weight.grad is not None:
+                                 module.weight.grad.data.mul_(reshaped_mask)
                 
                 optimizer.step()
                 total_loss += loss.item()
