@@ -1,6 +1,5 @@
-# 联邦学习中基于方向对齐检测的后门攻击检测框架
-
-本项目是论文“Detecting Backdoor Attacks in Federated Learning via Direction Alignment Inspection”的官方实现，框架在 AlignIns 方法的基础上进行了改进与扩展。核心第三章方法对应实现为 `origin_alignins_clustering_weighted3_dynamic_softmax_gated`。
+# 基于多指标一致性与聚类甄别的联邦鲁棒聚合方法
+本项目框架在 AlignIns 方法的基础上进行了改进与扩展。核心第三章方法对应实现为 `origin_alignins_clustering_weighted3_dynamic_softmax_gated`。
 
 论文地址：[arXiv:2503.07978](https://arxiv.org/abs/2503.07978)
 
